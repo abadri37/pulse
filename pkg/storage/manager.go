@@ -25,11 +25,22 @@ func NewManager() (*Manager, error) {
 		return nil, fmt.Errorf("unable to locate user home directory: %w", err)
 	}
 
-	basePath := filepath.Join(homeDir, ".pulse")
+	m, err := NewManagerWithBasePath(filepath.Join(homeDir, ".pulse"))
+	if err != nil {
+		return nil, err
+	}
+
+	// Seed with demo workspace if empty
+	m.seedDefaultWorkspace()
+
+	return m, nil
+}
+
+// NewManagerWithBasePath initializes a storage manager rooted at basePath without seeding defaults.
+func NewManagerWithBasePath(basePath string) (*Manager, error) {
 	collectionsPath := filepath.Join(basePath, "collections")
 	environmentsPath := filepath.Join(basePath, "environments")
 
-	// Create directories if they do not exist
 	if err := os.MkdirAll(collectionsPath, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create collections directory: %w", err)
 	}
@@ -37,12 +48,7 @@ func NewManager() (*Manager, error) {
 		return nil, fmt.Errorf("failed to create environments directory: %w", err)
 	}
 
-	m := &Manager{basePath: basePath}
-
-	// Seed with demo workspace if empty
-	m.seedDefaultWorkspace()
-
-	return m, nil
+	return &Manager{basePath: basePath}, nil
 }
 
 // GetBasePath returns the current disk storage path
