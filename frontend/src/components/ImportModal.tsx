@@ -27,24 +27,30 @@ export const ImportModal: React.FC<Props> = ({
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   React.useEffect(() => {
-    if (isOpen && initialTab) {
-      setTab(initialTab);
+    if (isOpen) {
+      if (initialTab) {
+        setTab(initialTab);
+      }
+      setStatusMessage(null);
     }
   }, [isOpen, initialTab]);
 
   if (!isOpen) return null;
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+    const inputEl = e.target;
+    const file = inputEl.files?.[0];
     if (!file) return;
 
     const reader = new FileReader();
     reader.onload = (event) => {
       const text = event.target?.result as string;
       setContent(text);
+      setStatusMessage(null);
       if (tab === 'csv' && file.name) {
         setTargetCollectionName(file.name.replace(/\.[^/.]+$/, ''));
       }
+      inputEl.value = '';
     };
     reader.readAsText(file);
   };

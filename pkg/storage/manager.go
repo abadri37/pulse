@@ -238,18 +238,34 @@ func (m *Manager) SaveRequest(req SavedRequest) error {
 // it updates that request in place instead of creating a duplicate. Same-named requests
 // in different directories are preserved as separate requests.
 func (m *Manager) SaveOrUpdateByNameAndDir(req SavedRequest) error {
+	_, err := m.SaveOrUpdateInCollectionBatch(req, nil)
+	return err
+}
+
+// SaveOrUpdateInCollectionBatch saves req inside its collection directory while matching
+// against existing unclaimed requests in that same directory. Priority order for matching:
+//  1. Same Name + Method + URL (exact endpoint match)
+//  2. Same Name + Method
+//  3. Same Name
+//
+// Any matched (or newly created) request ID is recorded in claimedIDs so that batches
+// containing intentional duplicate names within the same directory preserve every distinct
+// request on initial import and update them 1-to-1 on re-import without creating extra copies.
+func (m *Manager) SaveOrUpdateInCollectionBatch(req SavedRequest, claimedIDs map[string]bool) (string, error) {
 	relPath, collDir, err := m.resolveCollectionDir(req.Collection)
 	if err != nil {
 		relPath, collDir, err = m.resolveCollectionDir("General")
 		if err != nil {
-			return err
+			return "", err
 		}
 	}
 	req.Collection = relPath
 
 	trimmedName := strings.TrimSpace(req.Name)
+	trimmedURL := strings.TrimSpace(req.URL)
 	if trimmedName != "" {
 		if entries, readErr := os.ReadDir(collDir); readErr == nil {
+			var tier1ID, tier2ID, tier3ID string
 			for _, entry := range entries {
 				if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
 					continue
@@ -262,15 +278,40 @@ func (m *Manager) SaveOrUpdateByNameAndDir(req SavedRequest) error {
 				if err := json.Unmarshal(data, &existing); err != nil {
 					continue
 				}
-				if strings.EqualFold(strings.TrimSpace(existing.Name), trimmedName) {
-					req.ID = existing.ID
+				if claimedIDs != nil && claimedIDs[existing.ID] {
+					continue
+				}
+				if !strings.EqualFold(strings.TrimSpace(existing.Name), trimmedName) {
+					continue
+				}
+				sameMethod := strings.EqualFold(strings.TrimSpace(existing.Method), strings.TrimSpace(req.Method))
+				sameURL := strings.TrimSpace(existing.URL) == trimmedURL
+				if sameMethod && sameURL && tier1ID == "" {
+					tier1ID = existing.ID
 					break
 				}
+				if sameMethod && tier2ID == "" {
+					tier2ID = existing.ID
+				} else if tier3ID == "" {
+					tier3ID = existing.ID
+				}
+			}
+
+			switch {
+			case tier1ID != "":
+				req.ID = tier1ID
+			case tier2ID != "":
+				req.ID = tier2ID
+			case tier3ID != "":
+				req.ID = tier3ID
 			}
 		}
 	}
 
-	return m.SaveRequest(req)
+	if claimedIDs != nil {
+		claimedIDs[req.ID] = true
+	}
+	return req.ID, m.SaveRequest(req)
 }
 
 // DeleteRequest deletes a request file from disk

@@ -127,18 +127,19 @@ func appendUniqueFolder(folders *[]string, seen map[string]bool, path string) {
 // ParseCollectionWithFolders parses Collection v2.0/v2.1 JSON or OpenAPI v2/v3 (JSON/YAML)
 // while preserving the full nested folder hierarchy.
 func ParseCollectionWithFolders(content string) (ImportResult, error) {
-	if matched, res, err := parseOpenAPISpecWithFolders(content); matched {
+	cleaned := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(content), "\ufeff"))
+	if matched, res, err := parseOpenAPISpecWithFolders(cleaned); matched {
 		return res, err
 	}
 
 	var coll CollectionDocument
-	if err := json.Unmarshal([]byte(content), &coll); err != nil {
+	if err := json.Unmarshal([]byte(cleaned), &coll); err != nil {
 		return ImportResult{}, fmt.Errorf("invalid specification: expected Collection v2.0/v2.1 JSON or OpenAPI v2/v3 (JSON/YAML): %w", err)
 	}
 
 	if len(coll.Item) == 0 && strings.TrimSpace(coll.Info.Name) == "" {
 		var nestedDoc folderRequestsDocument
-		if err := json.Unmarshal([]byte(content), &nestedDoc); err == nil &&
+		if err := json.Unmarshal([]byte(cleaned), &nestedDoc); err == nil &&
 			(strings.TrimSpace(nestedDoc.Name) != "" || len(nestedDoc.Folders) > 0 || len(nestedDoc.Requests) > 0) {
 			return convertFolderRequestsDoc(nestedDoc), nil
 		}

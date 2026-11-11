@@ -466,20 +466,18 @@ func (a *App) ImportCollectionIntoFolder(jsonContent string, parentFolder string
 	}
 
 	count := 0
-	batchSeen := map[string]bool{}
+	claimedIDs := map[string]bool{}
+	var lastSaveErr error
 	for _, req := range res.Requests {
 		req.Collection = remapPath(req.Collection)
-		batchKey := strings.ToLower(req.Collection) + "|" + strings.ToLower(strings.TrimSpace(req.Name))
-		var saveErr error
-		if batchSeen[batchKey] {
-			saveErr = a.storage.SaveRequest(req)
-		} else {
-			batchSeen[batchKey] = true
-			saveErr = a.storage.SaveOrUpdateByNameAndDir(req)
-		}
-		if saveErr == nil {
+		if _, saveErr := a.storage.SaveOrUpdateInCollectionBatch(req, claimedIDs); saveErr == nil {
 			count++
+		} else {
+			lastSaveErr = saveErr
 		}
+	}
+	if count == 0 && len(res.Requests) > 0 && lastSaveErr != nil {
+		return 0, fmt.Errorf("failed to save imported requests: %w", lastSaveErr)
 	}
 
 	return count, nil

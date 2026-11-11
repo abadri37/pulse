@@ -391,3 +391,38 @@ func TestFolderRequestsJSON_NestedImport(t *testing.T) {
 		t.Fatalf("unexpected folder paths: %+v", res.Requests)
 	}
 }
+
+func TestOpenAPIv3_BOMRootTagAndDeclaredEmptyFolders(t *testing.T) {
+	oa3 := "\ufeff" + `{
+  "openapi": "3.0.3",
+  "info": { "title": "Kinto Global API" },
+  "tags": [
+    { "name": "Kinto Global API/EmptyStaging" }
+  ],
+  "paths": {
+    "/root-ping": {
+      "get": {
+        "summary": "Root Ping",
+        "tags": ["Kinto Global API"]
+      }
+    }
+  }
+}`
+	res, err := ParseCollectionWithFolders(oa3)
+	if err != nil {
+		t.Fatalf("ParseCollectionWithFolders failed: %v", err)
+	}
+	if len(res.Requests) != 1 || res.Requests[0].Collection != "Kinto Global API" {
+		t.Fatalf("expected tag matching root title to land in 'Kinto Global API', got %+v", res.Requests)
+	}
+	foundEmpty := false
+	for _, f := range res.Folders {
+		if f == "Kinto Global API/EmptyStaging" {
+			foundEmpty = true
+			break
+		}
+	}
+	if !foundEmpty {
+		t.Fatalf("expected declared empty tag folder in %v", res.Folders)
+	}
+}

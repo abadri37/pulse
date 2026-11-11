@@ -138,3 +138,101 @@ func TestAppImport_OpenAPIv3MultiTagKeepsBothUnitAccountAndDocuments(t *testing.
 		}
 	}
 }
+
+func TestAppImport_OpenAPIv3MultipleDirsWithDuplicatesInsideEachDir(t *testing.T) {
+	store, err := storage.NewManagerWithBasePath(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewManagerWithBasePath failed: %v", err)
+	}
+	app := &App{storage: store}
+
+	oa3 := "\ufeff" + `{
+  "openapi": "3.0.3",
+  "info": { "title": "Kinto Global API", "version": "1.0.0" },
+  "servers": [{ "url": "https://api.kinto.example.com" }],
+  "paths": {
+    "/documents/companies": {
+      "get": {
+        "summary": "Get Companies",
+        "tags": ["Kinto Global API/Documents"]
+      },
+      "POST": {
+        "summary": "Get Companies",
+        "tags": ["Kinto Global API/Documents"]
+      }
+    },
+    "/unit-account/companies": {
+      "get": {
+        "summary": "Get Companies",
+        "tags": ["Kinto Global API-Unit Account"]
+      },
+      "put": {
+        "summary": "Get Companies",
+        "tags": ["Kinto Global API-Unit Account"]
+      }
+    },
+    "/nested/companies": {
+      "get": {
+        "summary": "Get Companies",
+        "tags": ["1/2/3/4"]
+      },
+      "delete": {
+        "summary": "Get Companies",
+        "tags": ["1/2/3/4"]
+      }
+    },
+    "/shared/health": {
+      "get": {
+        "summary": "Shared Check",
+        "tags": ["Kinto Global API/Documents", "Kinto Global API-Unit Account", "1/2/3/4"]
+      }
+    }
+  }
+}`
+
+	count, err := app.ImportCollectionJSON(oa3)
+	if err != nil {
+		t.Fatalf("ImportCollectionJSON failed: %v", err)
+	}
+	if count != 9 {
+		t.Fatalf("expected 9 imported requests across 3 dirs (3 per dir), got %d", count)
+	}
+
+	// Re-importing the exact same spec must keep exactly 9 requests (no extra duplicates)
+	count2, err := app.ImportCollectionJSON(oa3)
+	if err != nil {
+		t.Fatalf("re-import failed: %v", err)
+	}
+	if count2 != 9 {
+		t.Fatalf("expected 9 requests processed on re-import, got %d", count2)
+	}
+
+	colls, err := store.LoadCollections()
+	if err != nil || len(colls) != 1 {
+		t.Fatalf("expected 1 root collection, got %+v (err=%v)", colls, err)
+	}
+	var totalLoaded int
+	byFolderPath := map[string][]storage.SavedRequest{}
+	var walk func(c storage.Collection)
+	walk = func(c storage.Collection) {
+		byFolderPath[c.Path] = c.Requests
+		totalLoaded += len(c.Requests)
+		for _, sub := range c.Folders {
+			walk(sub)
+		}
+	}
+	walk(colls[0])
+	if totalLoaded != 9 {
+		t.Fatalf("expected 9 total requests on disk after re-import, got %d", totalLoaded)
+	}
+	for _, wantDir := range []string{
+		"Kinto Global API/Documents",
+		"Kinto Global API/Unit Account",
+		"Kinto Global API/1/2/3/4",
+	} {
+		reqs := byFolderPath[wantDir]
+		if len(reqs) != 3 {
+			t.Fatalf("expected 3 requests in %q (2 duplicate-named ops + 1 shared), got %d: %+v", wantDir, len(reqs), reqs)
+		}
+	}
+}
