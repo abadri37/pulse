@@ -119,39 +119,90 @@ pulse/
 
 ---
 
-## Getting Started
+## Getting Started (New Machine Setup)
 
-### Prerequisites
+### 1. System Prerequisites
 
-- **Go** `1.26+`
-- **Node.js** `18+` and **npm**
-- **Wails CLI v2**:
-  ```bash
-  go install github.com/wailsapp/wails/v2/cmd/wails@latest
-  ```
+#### macOS
+1. **Install Xcode Command Line Tools:**
+   ```bash
+   xcode-select --install
+   ```
+2. **Install Go (`1.26+`) and Node.js (`18+`):**
+   ```bash
+   brew install go node
+   ```
+   Verify installed versions:
+   ```bash
+   go version
+   node -v
+   npm -v
+   ```
 
-### Install Frontend Dependencies
+#### Windows / Linux
+- **Windows:** Install [Go 1.26+](https://go.dev/dl/), [Node.js 18+](https://nodejs.org/), and Microsoft WebView2 (pre-installed on Windows 10/11).
+- **Linux (Debian/Ubuntu):** Install Go `1.26+`, Node.js `18+`, and Wails native dependencies (`libgtk-3-dev`, `libwebkit2gtk-4.1-dev` or `4.0-dev`, `build-essential`).
+
+---
+
+### 2. Install & Verify Wails CLI v2
+
+1. **Install the Wails CLI:**
+   ```bash
+   go install github.com/wailsapp/wails/v2/cmd/wails@latest
+   ```
+2. **Add Go's `bin` directory to your `PATH`** (so `wails` can be run from anywhere):
+   - **macOS / Linux (`~/.zshrc` or `~/.bashrc`):**
+     ```bash
+     echo 'export PATH="$PATH:$(go env GOPATH)/bin"' >> ~/.zshrc
+     source ~/.zshrc
+     ```
+   - **Windows (PowerShell):** Ensure `%USERPROFILE%\go\bin` is included in your user `PATH` environment variable.
+3. **Verify your local setup with `wails doctor`:**
+   ```bash
+   wails doctor
+   ```
+   Confirm the output ends with: `SUCCESS  Your system is ready for Wails development!`.
+
+---
+
+### 3. Clone & Install Project Dependencies
 
 ```bash
+git clone <your-repo-url>
+cd pulse
+
+# Download Go module dependencies
+go mod download
+
+# Install frontend npm dependencies
 cd frontend
 npm install
+cd ..
 ```
 
-### Run in Development Mode
+---
+
+### 4. Run in Development Mode (Hot Reload)
 
 ```bash
 wails dev
 ```
 
-### Build Production Desktop App
+This launches the native desktop window with live Vite frontend hot reload and automatic Go backend recompilation.
 
+---
+
+### 5. Build Production Desktop App
+
+- **macOS `.app` bundle with full multi-resolution icon & ad-hoc signature (recommended on macOS):**
+  ```bash
+  bash scripts/build-app.sh
+  open build/bin/pulse.app
+  ```
 - **Standard Wails build (macOS / Windows / Linux):**
   ```bash
   wails build
-  ```
-- **macOS `.app` bundle with full multi-resolution icon & ad-hoc signature:**
-  ```bash
-  bash scripts/build-app.sh
   ```
   Output binary location:
   - macOS: `build/bin/pulse.app`
