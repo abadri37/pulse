@@ -326,3 +326,68 @@ func TestOpenAPI_StripsRedundantRootPrefixFromTagFolder(t *testing.T) {
 		t.Fatalf("expected 'Kinto Global API/Driver/SubA', got %q", gotBySummary["List Drivers"])
 	}
 }
+
+func TestOpenAPIv3_MultiTagPlacesRequestInAllTaggedDirectories(t *testing.T) {
+	oa3 := `{
+  "openapi": "3.0.3",
+  "info": { "title": "Kinto Global API" },
+  "paths": {
+    "/companies": {
+      "get": {
+        "summary": "Get Companies",
+        "tags": ["Kinto Global API-Unit Account", "Kinto Global API / Documents"]
+      }
+    }
+  }
+}`
+	res, err := ParseCollectionWithFolders(oa3)
+	if err != nil {
+		t.Fatalf("ParseCollectionWithFolders failed: %v", err)
+	}
+	if len(res.Requests) != 2 {
+		t.Fatalf("expected 2 requests (1 in Unit Account, 1 in Documents), got %d: %+v", len(res.Requests), res.Requests)
+	}
+	dirs := map[string]bool{}
+	for _, r := range res.Requests {
+		dirs[r.Collection] = true
+	}
+	if !dirs["Kinto Global API/Unit Account"] || !dirs["Kinto Global API/Documents"] {
+		t.Fatalf("expected requests in both Unit Account and Documents, got %+v", dirs)
+	}
+}
+
+func TestFolderRequestsJSON_NestedImport(t *testing.T) {
+	doc := `{
+  "v": 2,
+  "name": "Kinto Global API",
+  "folders": [
+    {
+      "v": 2,
+      "name": "Unit Account",
+      "folders": [],
+      "requests": [
+        { "name": "Get Company", "method": "GET", "endpoint": "https://api.example.com/unit/company" }
+      ]
+    },
+    {
+      "v": 2,
+      "name": "Documents",
+      "folders": [],
+      "requests": [
+        { "name": "Get Companies", "method": "GET", "endpoint": "https://api.example.com/docs/companies" }
+      ]
+    }
+  ],
+  "requests": []
+}`
+	res, err := ParseCollectionWithFolders(doc)
+	if err != nil {
+		t.Fatalf("ParseCollectionWithFolders failed: %v", err)
+	}
+	if len(res.Requests) != 2 {
+		t.Fatalf("expected 2 requests, got %d", len(res.Requests))
+	}
+	if res.Requests[0].Collection != "Kinto Global API/Unit Account" || res.Requests[1].Collection != "Kinto Global API/Documents" {
+		t.Fatalf("unexpected folder paths: %+v", res.Requests)
+	}
+}

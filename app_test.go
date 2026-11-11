@@ -103,3 +103,38 @@ func TestAppImport_SameNameAcrossDifferentDirsPreservedAndSameDirUpdated(t *test
 		}
 	}
 }
+
+func TestAppImport_OpenAPIv3MultiTagKeepsBothUnitAccountAndDocuments(t *testing.T) {
+	store, err := storage.NewManagerWithBasePath(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewManagerWithBasePath failed: %v", err)
+	}
+	app := &App{storage: store}
+
+	oa3 := `{
+  "openapi": "3.0.3",
+  "info": { "title": "Kinto Global API" },
+  "paths": {
+    "/companies": {
+      "get": {
+        "summary": "Get Companies",
+        "tags": ["Kinto Global API-Unit Account", "Kinto Global API/Documents"]
+      }
+    }
+  }
+}`
+	count, err := app.ImportCollectionJSON(oa3)
+	if err != nil || count != 2 {
+		t.Fatalf("expected 2 requests imported, got count=%d err=%v", count, err)
+	}
+
+	colls, err := store.LoadCollections()
+	if err != nil || len(colls) != 1 || len(colls[0].Folders) != 2 {
+		t.Fatalf("expected 2 folders under Kinto Global API, got %+v (err=%v)", colls, err)
+	}
+	for _, f := range colls[0].Folders {
+		if len(f.Requests) != 1 || f.Requests[0].Name != "Get Companies" {
+			t.Fatalf("expected Get Companies inside folder %q, got %+v", f.Name, f.Requests)
+		}
+	}
+}

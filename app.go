@@ -466,9 +466,18 @@ func (a *App) ImportCollectionIntoFolder(jsonContent string, parentFolder string
 	}
 
 	count := 0
+	batchSeen := map[string]bool{}
 	for _, req := range res.Requests {
 		req.Collection = remapPath(req.Collection)
-		if err := a.storage.SaveOrUpdateByNameAndDir(req); err == nil {
+		batchKey := strings.ToLower(req.Collection) + "|" + strings.ToLower(strings.TrimSpace(req.Name))
+		var saveErr error
+		if batchSeen[batchKey] {
+			saveErr = a.storage.SaveRequest(req)
+		} else {
+			batchSeen[batchKey] = true
+			saveErr = a.storage.SaveOrUpdateByNameAndDir(req)
+		}
+		if saveErr == nil {
 			count++
 		}
 	}

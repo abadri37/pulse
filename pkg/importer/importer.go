@@ -20,6 +20,36 @@ type CollectionDocument struct {
 	Item []CollectionItemNode `json:"item"`
 }
 
+// folderRequestsDocument represents nested collection JSON exports using folders[] + requests[]
+type folderRequestsDocument struct {
+	Name     string                   `json:"name"`
+	Folders  []folderRequestsDocument `json:"folders"`
+	Requests []folderRequestEntry     `json:"requests"`
+}
+
+type folderRequestEntry struct {
+	Name       string `json:"name"`
+	Method     string `json:"method"`
+	Endpoint   string `json:"endpoint"`
+	URL        string `json:"url"`
+	PreRequest string `json:"preRequestScript"`
+	TestScript string `json:"testScript"`
+	Params     []struct {
+		Key    string `json:"key"`
+		Value  string `json:"value"`
+		Active *bool  `json:"active"`
+	} `json:"params"`
+	Headers []struct {
+		Key    string `json:"key"`
+		Value  string `json:"value"`
+		Active *bool  `json:"active"`
+	} `json:"headers"`
+	Body struct {
+		ContentType string `json:"contentType"`
+		Body        string `json:"body"`
+	} `json:"body"`
+}
+
 // CollectionItemNode can represent a folder or a request
 type CollectionItemNode struct {
 	Name    string                 `json:"name"`
@@ -106,6 +136,14 @@ func ParseCollectionWithFolders(content string) (ImportResult, error) {
 		return ImportResult{}, fmt.Errorf("invalid specification: expected Collection v2.0/v2.1 JSON or OpenAPI v2/v3 (JSON/YAML): %w", err)
 	}
 
+	if len(coll.Item) == 0 && strings.TrimSpace(coll.Info.Name) == "" {
+		var nestedDoc folderRequestsDocument
+		if err := json.Unmarshal([]byte(content), &nestedDoc); err == nil &&
+			(strings.TrimSpace(nestedDoc.Name) != "" || len(nestedDoc.Folders) > 0 || len(nestedDoc.Requests) > 0) {
+			return convertFolderRequestsDoc(nestedDoc), nil
+		}
+	}
+
 	collName := sanitizeFolderSegment(coll.Info.Name)
 	if strings.TrimSpace(coll.Info.Name) == "" {
 		collName = "Imported Collection"
@@ -123,6 +161,86 @@ func ParseCollectionWithFolders(content string) (ImportResult, error) {
 		Folders:        folders,
 		Requests:       requests,
 	}, nil
+}
+
+func convertFolderRequestsDoc(doc folderRequestsDocument) ImportResult {
+	rootName := sanitizeFolderSegment(doc.Name)
+	if strings.TrimSpace(doc.Name) == "" {
+		rootName = "Imported Collection"
+	}
+
+	seenFolders := map[string]bool{}
+	var folders []string
+	var requests []storage.SavedRequest
+
+	var walk func(node folderRequestsDocument, curPath string)
+	walk = func(node folderRequestsDocument, curPath string) {
+		appendUniqueFolder(&folders, seenFolders, curPath)
+		for _, r := range node.Requests {
+			method := strings.ToUpper(strings.TrimSpace(r.Method))
+			if method == "" {
+				method = "GET"
+			}
+			reqURL := strings.TrimSpace(r.Endpoint)
+			if reqURL == "" {
+				reqURL = strings.TrimSpace(r.URL)
+			}
+			var params []engine.ParamPair
+			for _, p := range r.Params {
+				enabled := true
+				if p.Active != nil {
+					enabled = *p.Active
+				}
+				params = append(params, engine.ParamPair{Key: p.Key, Value: p.Value, Enabled: enabled})
+			}
+			var headers []engine.HeaderPair
+			for _, h := range r.Headers {
+				enabled := true
+				if h.Active != nil {
+					enabled = *h.Active
+				}
+				headers = append(headers, engine.HeaderPair{Key: h.Key, Value: h.Value, Enabled: enabled})
+			}
+			bodyType := "none"
+			if strings.TrimSpace(r.Body.Body) != "" {
+				ct := strings.ToLower(r.Body.ContentType)
+				switch {
+				case strings.Contains(ct, "xml"):
+					bodyType = "xml"
+				case strings.Contains(ct, "x-www-form-urlencoded"):
+					bodyType = "x-www-form-urlencoded"
+				case strings.Contains(ct, "text/plain"):
+					bodyType = "raw"
+				default:
+					bodyType = "json"
+				}
+			}
+			requests = append(requests, storage.SavedRequest{
+				ID:                 fmt.Sprintf("req_coll_%d_%d", time.Now().UnixNano(), len(requests)),
+				Name:               r.Name,
+				Collection:         curPath,
+				Method:             method,
+				URL:                reqURL,
+				Headers:            headers,
+				QueryParams:        params,
+				Body:               engine.RequestBody{Type: bodyType, Raw: r.Body.Body},
+				PreRequestScript:   r.PreRequest,
+				PostResponseScript: r.TestScript,
+				LastModifiedAt:     time.Now().Unix(),
+			})
+		}
+		for _, sub := range node.Folders {
+			subName := sanitizeFolderSegment(sub.Name)
+			walk(sub, curPath+"/"+subName)
+		}
+	}
+
+	walk(doc, rootName)
+	return ImportResult{
+		CollectionName: rootName,
+		Folders:        folders,
+		Requests:       requests,
+	}
 }
 
 // ParseCollectionJSON automatically detects OpenAPI v3 (3.0/3.1), OpenAPI v2 (Swagger 2.0)

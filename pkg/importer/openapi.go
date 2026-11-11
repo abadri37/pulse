@@ -242,19 +242,21 @@ func parseOpenAPIv3Map(root map[string]interface{}) (ImportResult, error) {
 				reqName = fmt.Sprintf("%s %s", method, cleanPath)
 			}
 
-			targetCollection := resolveOpenAPITagFolder(collName, op, &folders, seenFolders)
-
-			requests = append(requests, storage.SavedRequest{
-				ID:             fmt.Sprintf("req_oa3_%d_%d", time.Now().UnixNano(), idx),
-				Name:           reqName,
-				Collection:     targetCollection,
-				Method:         method,
-				URL:            fullURL,
-				Headers:        headers,
-				QueryParams:    queryParams,
-				Body:           body,
-				LastModifiedAt: time.Now().Unix(),
-			})
+			targetCollections := resolveOpenAPITagFolders(collName, op, &folders, seenFolders)
+			for _, targetCollection := range targetCollections {
+				idx++
+				requests = append(requests, storage.SavedRequest{
+					ID:             fmt.Sprintf("req_oa3_%d_%d", time.Now().UnixNano(), idx),
+					Name:           reqName,
+					Collection:     targetCollection,
+					Method:         method,
+					URL:            fullURL,
+					Headers:        headers,
+					QueryParams:    queryParams,
+					Body:           body,
+					LastModifiedAt: time.Now().Unix(),
+				})
+			}
 		}
 	}
 
@@ -386,20 +388,23 @@ func parseOpenAPIv2Map(root map[string]interface{}) (ImportResult, error) {
 				reqName = fmt.Sprintf("%s %s", method, opPath)
 			}
 
-			targetCollection := resolveOpenAPITagFolder(collName, op, &folders, seenFolders)
+			targetCollections := resolveOpenAPITagFolders(collName, op, &folders, seenFolders)
 
 			fullURL := fmt.Sprintf("%s://%s%s%s", scheme, host, basePath, opPath)
-			requests = append(requests, storage.SavedRequest{
-				ID:             fmt.Sprintf("req_oa2_%d_%d", time.Now().UnixNano(), idx),
-				Name:           reqName,
-				Collection:     targetCollection,
-				Method:         method,
-				URL:            fullURL,
-				Headers:        headers,
-				QueryParams:    queryParams,
-				Body:           body,
-				LastModifiedAt: time.Now().Unix(),
-			})
+			for _, targetCollection := range targetCollections {
+				idx++
+				requests = append(requests, storage.SavedRequest{
+					ID:             fmt.Sprintf("req_oa2_%d_%d", time.Now().UnixNano(), idx),
+					Name:           reqName,
+					Collection:     targetCollection,
+					Method:         method,
+					URL:            fullURL,
+					Headers:        headers,
+					QueryParams:    queryParams,
+					Body:           body,
+					LastModifiedAt: time.Now().Unix(),
+				})
+			}
 		}
 	}
 
@@ -410,37 +415,35 @@ func parseOpenAPIv2Map(root map[string]interface{}) (ImportResult, error) {
 	}, nil
 }
 
-func resolveOpenAPITagFolder(
+func resolveSingleTagFolder(
 	collName string,
-	op map[string]interface{},
+	rawTag string,
 	folders *[]string,
 	seenFolders map[string]bool,
 ) string {
-	tags := sliceVal(op["tags"])
-	if len(tags) == 0 {
-		return collName
-	}
-	firstTag := strings.TrimSpace(strVal(tags[0]))
-	if firstTag == "" {
+	tag := strings.TrimSpace(rawTag)
+	if tag == "" {
 		return collName
 	}
 
-	// Strip redundant root collection prefix if tag repeats it (e.g. "Kinto Global API-Contract" or "Kinto Global API/Contract")
-	lowerTag := strings.ToLower(firstTag)
+	// Strip redundant root collection prefix (with optional whitespace around separators)
+	lowerTag := strings.ToLower(tag)
 	lowerRoot := strings.ToLower(collName)
-	for _, sep := range []string{"/", "\\", " - ", "-", "_", ":"} {
-		prefix := lowerRoot + sep
-		if strings.HasPrefix(lowerTag, prefix) {
-			stripped := strings.TrimSpace(firstTag[len(prefix):])
-			if stripped != "" {
-				firstTag = stripped
+	if strings.HasPrefix(lowerTag, lowerRoot) {
+		rest := strings.TrimSpace(tag[len(collName):])
+		for _, sep := range []string{"/", "\\", "-", "_", ":"} {
+			if strings.HasPrefix(rest, sep) {
+				candidate := strings.TrimSpace(rest[len(sep):])
+				if candidate != "" {
+					tag = candidate
+				}
 				break
 			}
 		}
 	}
 
 	curPath := collName
-	for _, rawSeg := range strings.Split(strings.ReplaceAll(firstTag, "\\", "/"), "/") {
+	for _, rawSeg := range strings.Split(strings.ReplaceAll(tag, "\\", "/"), "/") {
 		trimmed := strings.TrimSpace(rawSeg)
 		if trimmed == "" {
 			continue
@@ -449,6 +452,36 @@ func resolveOpenAPITagFolder(
 		appendUniqueFolder(folders, seenFolders, curPath)
 	}
 	return curPath
+}
+
+func resolveOpenAPITagFolders(
+	collName string,
+	op map[string]interface{},
+	folders *[]string,
+	seenFolders map[string]bool,
+) []string {
+	tags := sliceVal(op["tags"])
+	if len(tags) == 0 {
+		return []string{collName}
+	}
+
+	var targets []string
+	seenTargets := map[string]bool{}
+	for _, t := range tags {
+		rawTag := strings.TrimSpace(strVal(t))
+		if rawTag == "" {
+			continue
+		}
+		target := resolveSingleTagFolder(collName, rawTag, folders, seenFolders)
+		if !seenTargets[target] {
+			seenTargets[target] = true
+			targets = append(targets, target)
+		}
+	}
+	if len(targets) == 0 {
+		return []string{collName}
+	}
+	return targets
 }
 
 func extractOpenAPIv3ServerURL(root map[string]interface{}) string {
