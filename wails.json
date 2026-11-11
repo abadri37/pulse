@@ -1,0 +1,20 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "pulse",
+  "outputfilename": "pulse",
+  "frontend:install": "npm install",
+  "frontend:build": "npm run build",
+  "frontend:dev:watcher": "npm run dev",
+  "frontend:dev:serverUrl": "auto",
+  "author": {
+    "name": "Mohana Badri K",
+    "email": "abadri95@yahoo.com"
+  },
+  "info": {
+    "companyName": "Pulse",
+    "productName": "Pulse",
+    "productVersion": "1.0.0",
+    "copyright": "Copyright © 2026 Pulse",
+    "comments": "Local-first API Client and Load Testing Studio"
+  }
+}
