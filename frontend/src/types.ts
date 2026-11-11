@@ -38,7 +38,9 @@ export interface RequestItem {
 export interface CollectionItem {
   id: string;
   name: string;
+  path?: string;
   requests: RequestItem[];
+  folders?: CollectionItem[];
 }
 
 export interface LiveStats {

@@ -258,6 +258,21 @@ func writeExportJSON(exportData interface{}, fileName string) (string, error) {
 	return filePath, nil
 }
 
+func findCollectionNode(colls []storage.Collection, target string) (*storage.Collection, bool) {
+	for _, c := range colls {
+		if c.Path == target || c.Name == target {
+			coll := c
+			return &coll, true
+		}
+		if len(c.Folders) > 0 {
+			if found, ok := findCollectionNode(c.Folders, target); ok {
+				return found, true
+			}
+		}
+	}
+	return nil, false
+}
+
 func (a *App) findCollectionByName(collectionName string) (*storage.Collection, error) {
 	if a.storage == nil {
 		return nil, fmt.Errorf("storage not initialized")
@@ -266,11 +281,8 @@ func (a *App) findCollectionByName(collectionName string) (*storage.Collection, 
 	if err != nil {
 		return nil, err
 	}
-	for _, c := range colls {
-		if c.Name == collectionName {
-			coll := c
-			return &coll, nil
-		}
+	if found, ok := findCollectionNode(colls, collectionName); ok {
+		return found, nil
 	}
 	return nil, fmt.Errorf("collection %q not found", collectionName)
 }
@@ -279,17 +291,28 @@ func safeExportName(name string) string {
 	return strings.NewReplacer(" ", "_", "/", "_", "\\", "_").Replace(name)
 }
 
-// ExportCollectionJSON exports a specific collection as a standard JSON file in ~/Downloads/
+func buildExportCollectionNodes(c storage.Collection) []map[string]interface{} {
+	nodes := make([]map[string]interface{}, 0, len(c.Folders)+len(c.Requests))
+	for _, folder := range c.Folders {
+		nodes = append(nodes, map[string]interface{}{
+			"name": folder.Name,
+			"item": buildExportCollectionNodes(folder),
+		})
+	}
+	for _, r := range c.Requests {
+		nodes = append(nodes, buildExportRequestItem(r))
+	}
+	return nodes
+}
+
+// ExportCollectionJSON exports a specific collection (preserving nested folders) as JSON in ~/Downloads/
 func (a *App) ExportCollectionJSON(collectionName string) (string, error) {
 	targetColl, err := a.findCollectionByName(collectionName)
 	if err != nil {
 		return "", err
 	}
 
-	items := make([]map[string]interface{}, 0, len(targetColl.Requests))
-	for _, r := range targetColl.Requests {
-		items = append(items, buildExportRequestItem(r))
-	}
+	items := buildExportCollectionNodes(*targetColl)
 
 	exportData := map[string]interface{}{
 		"info": map[string]interface{}{
@@ -374,23 +397,25 @@ func (a *App) DeleteEnvironment(id string) error {
 	return a.storage.DeleteEnvironment(id)
 }
 
-// ImportCollectionJSON auto-detects and imports Collection v2.0/v2.1 JSON, OpenAPI v2 (Swagger 2.0), or OpenAPI v3 (3.0/3.1 JSON/YAML) into disk storage
+// ImportCollectionJSON auto-detects and imports Collection v2.0/v2.1 JSON, OpenAPI v2 (Swagger 2.0), or OpenAPI v3 (3.0/3.1 JSON/YAML) with full folder hierarchy into disk storage
 func (a *App) ImportCollectionJSON(jsonContent string) (int, error) {
 	if a.storage == nil {
 		return 0, fmt.Errorf("storage engine not initialized")
 	}
 
-	collName, requests, err := importer.ParseCollectionJSON(jsonContent)
+	res, err := importer.ParseCollectionWithFolders(jsonContent)
 	if err != nil {
 		return 0, err
 	}
 
-	if err := a.storage.CreateCollection(collName); err != nil {
-		return 0, fmt.Errorf("failed to create collection folder: %w", err)
+	for _, folderPath := range res.Folders {
+		if err := a.storage.CreateCollection(folderPath); err != nil {
+			return 0, fmt.Errorf("failed to create collection folder %q: %w", folderPath, err)
+		}
 	}
 
 	count := 0
-	for _, req := range requests {
+	for _, req := range res.Requests {
 		if err := a.storage.SaveRequest(req); err == nil {
 			count++
 		}

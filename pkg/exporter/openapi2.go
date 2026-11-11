@@ -160,6 +160,26 @@ func inferJSONSchema(raw string) map[string]interface{} {
 	}
 }
 
+type taggedRequest struct {
+	req storage.SavedRequest
+	tag string
+}
+
+func flattenCollectionRequests(coll storage.Collection, defaultTag string) []taggedRequest {
+	var out []taggedRequest
+	for _, r := range coll.Requests {
+		out = append(out, taggedRequest{req: r, tag: defaultTag})
+	}
+	for _, sub := range coll.Folders {
+		subTag := strings.TrimSpace(sub.Name)
+		if subTag == "" {
+			subTag = defaultTag
+		}
+		out = append(out, flattenCollectionRequests(sub, subTag)...)
+	}
+	return out
+}
+
 // CollectionToOpenAPI2 converts a Pulse Collection into an OpenAPI v2 (Swagger 2.0) spec.
 func CollectionToOpenAPI2(coll storage.Collection, appVersion string) OpenAPI2Spec {
 	if strings.TrimSpace(appVersion) == "" {
@@ -184,7 +204,9 @@ func CollectionToOpenAPI2(coll storage.Collection, appVersion string) OpenAPI2Sp
 	schemeSet := make(map[string]bool)
 	opCounter := 0
 
-	for _, req := range coll.Requests {
+	for _, item := range flattenCollectionRequests(coll, title) {
+		req := item.req
+		opTag := item.tag
 		scheme, host, reqPath, inlineQuery := parseRequestURL(req.URL)
 		if spec.Host == "" && host != "" {
 			spec.Host = host
@@ -329,7 +351,7 @@ func CollectionToOpenAPI2(coll storage.Collection, appVersion string) OpenAPI2Sp
 		op := OpenAPI2Operation{
 			Summary:     req.Name,
 			OperationID: fmt.Sprintf("%s_%s_%d", method, sanitizeOpID(req.Name), opCounter),
-			Tags:        []string{title},
+			Tags:        []string{opTag},
 			Consumes:    consumes,
 			Produces:    produces,
 			Parameters:  params,

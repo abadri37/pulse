@@ -66,40 +66,105 @@ type CollectionURLSpec struct {
 	} `json:"query"`
 }
 
-// ParseCollectionJSON automatically detects OpenAPI v3 (3.0/3.1), OpenAPI v2 (Swagger 2.0)
-// in JSON or YAML, or Collection v2.0/v2.1 JSON and converts them into Pulse saved requests.
-func ParseCollectionJSON(content string) (string, []storage.SavedRequest, error) {
-	if matched, collName, requests, err := parseOpenAPISpec(content); matched {
-		return collName, requests, err
+// ImportResult bundles the root collection name, every folder/subfolder path, and converted requests
+type ImportResult struct {
+	CollectionName string
+	Folders        []string
+	Requests       []storage.SavedRequest
+}
+
+func sanitizeFolderSegment(name string) string {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" || trimmed == "." || trimmed == ".." {
+		return "Folder"
+	}
+	replacer := strings.NewReplacer("/", "-", "\\", "-", ":", "-", "\x00", "")
+	out := strings.TrimSpace(replacer.Replace(trimmed))
+	if out == "" {
+		return "Folder"
+	}
+	return out
+}
+
+func appendUniqueFolder(folders *[]string, seen map[string]bool, path string) {
+	if path == "" || seen[path] {
+		return
+	}
+	seen[path] = true
+	*folders = append(*folders, path)
+}
+
+// ParseCollectionWithFolders parses Collection v2.0/v2.1 JSON or OpenAPI v2/v3 (JSON/YAML)
+// while preserving the full nested folder hierarchy.
+func ParseCollectionWithFolders(content string) (ImportResult, error) {
+	if matched, res, err := parseOpenAPISpecWithFolders(content); matched {
+		return res, err
 	}
 
 	var coll CollectionDocument
 	if err := json.Unmarshal([]byte(content), &coll); err != nil {
-		return "", nil, fmt.Errorf("invalid specification: expected Collection v2.0/v2.1 JSON or OpenAPI v2/v3 (JSON/YAML): %w", err)
+		return ImportResult{}, fmt.Errorf("invalid specification: expected Collection v2.0/v2.1 JSON or OpenAPI v2/v3 (JSON/YAML): %w", err)
 	}
 
-	collName := strings.TrimSpace(coll.Info.Name)
-	if collName == "" {
+	collName := sanitizeFolderSegment(coll.Info.Name)
+	if strings.TrimSpace(coll.Info.Name) == "" {
 		collName = "Imported Collection"
 	}
 
-	var requests []storage.SavedRequest
-	extractCollectionItems(coll.Item, collName, &requests)
+	seenFolders := map[string]bool{}
+	var folders []string
+	appendUniqueFolder(&folders, seenFolders, collName)
 
-	return collName, requests, nil
+	var requests []storage.SavedRequest
+	extractCollectionItems(coll.Item, collName, &folders, seenFolders, &requests)
+
+	return ImportResult{
+		CollectionName: collName,
+		Folders:        folders,
+		Requests:       requests,
+	}, nil
 }
 
-// Recursively walks collection items (handles nested folders)
-func extractCollectionItems(items []CollectionItemNode, collectionName string, out *[]storage.SavedRequest) {
+// ParseCollectionJSON automatically detects OpenAPI v3 (3.0/3.1), OpenAPI v2 (Swagger 2.0)
+// in JSON or YAML, or Collection v2.0/v2.1 JSON and converts them into Pulse saved requests.
+func ParseCollectionJSON(content string) (string, []storage.SavedRequest, error) {
+	res, err := ParseCollectionWithFolders(content)
+	if err != nil {
+		return "", nil, err
+	}
+	return res.CollectionName, res.Requests, nil
+}
+
+// Recursively walks collection items and preserves every nested folder path
+func extractCollectionItems(
+	items []CollectionItemNode,
+	currentPath string,
+	folders *[]string,
+	seenFolders map[string]bool,
+	out *[]storage.SavedRequest,
+) {
 	for _, it := range items {
-		if len(it.Item) > 0 {
-			// Nested folder: recurse
-			extractCollectionItems(it.Item, collectionName, out)
+		isFolder := it.Request == nil || len(it.Item) > 0
+		if isFolder && it.Request == nil {
+			folderName := sanitizeFolderSegment(it.Name)
+			subPath := currentPath + "/" + folderName
+			appendUniqueFolder(folders, seenFolders, subPath)
+			if len(it.Item) > 0 {
+				extractCollectionItems(it.Item, subPath, folders, seenFolders, out)
+			}
+			continue
 		}
 
 		if it.Request != nil {
-			req := convertCollectionRequest(it.Name, collectionName, it.Request, it.Event, len(*out))
+			req := convertCollectionRequest(it.Name, currentPath, it.Request, it.Event, len(*out))
 			*out = append(*out, req)
+		}
+
+		if len(it.Item) > 0 {
+			folderName := sanitizeFolderSegment(it.Name)
+			subPath := currentPath + "/" + folderName
+			appendUniqueFolder(folders, seenFolders, subPath)
+			extractCollectionItems(it.Item, subPath, folders, seenFolders, out)
 		}
 	}
 }

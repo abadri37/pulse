@@ -3,7 +3,9 @@ package storage
 import (
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"pulse/pkg/engine"
 	"sort"
@@ -98,7 +100,30 @@ func (m *Manager) LoadWorkspace() WorkspaceData {
 	}
 }
 
-// LoadCollections reads all folders and JSON requests in ~/.pulse/collections/
+func (m *Manager) resolveCollectionDir(folderPath string) (string, string, error) {
+	normalized := strings.ReplaceAll(strings.TrimSpace(folderPath), "\\", "/")
+	rawParts := strings.Split(normalized, "/")
+	parts := make([]string, 0, len(rawParts))
+	for _, seg := range rawParts {
+		s := strings.TrimSpace(seg)
+		if s == "" {
+			continue
+		}
+		if s == "." || s == ".." {
+			return "", "", fmt.Errorf("invalid collection folder segment %q", s)
+		}
+		parts = append(parts, s)
+	}
+	if len(parts) == 0 {
+		return "", "", fmt.Errorf("collection name cannot be empty")
+	}
+
+	relPath := strings.Join(parts, "/")
+	pathSegments := append([]string{m.basePath, "collections"}, parts...)
+	return relPath, filepath.Join(pathSegments...), nil
+}
+
+// LoadCollections reads all folders, nested subfolders, and JSON requests in ~/.pulse/collections/
 func (m *Manager) LoadCollections() ([]Collection, error) {
 	collectionsDir := filepath.Join(m.basePath, "collections")
 	entries, err := os.ReadDir(collectionsDir)
@@ -107,62 +132,86 @@ func (m *Manager) LoadCollections() ([]Collection, error) {
 	}
 
 	var collections []Collection
-
 	for _, entry := range entries {
-		if !entry.IsDir() {
+		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
 			continue
 		}
-
 		collName := entry.Name()
 		collPath := filepath.Join(collectionsDir, collName)
-
-		reqFiles, err := os.ReadDir(collPath)
-		if err != nil {
-			continue
+		node, ok := m.loadCollectionNode(collPath, collName, collName)
+		if ok {
+			collections = append(collections, node)
 		}
-
-		var requests []SavedRequest
-		for _, file := range reqFiles {
-			if file.IsDir() || !strings.HasSuffix(file.Name(), ".json") {
-				continue
-			}
-
-			filePath := filepath.Join(collPath, file.Name())
-			data, err := os.ReadFile(filePath)
-			if err != nil {
-				continue
-			}
-
-			var req SavedRequest
-			if err := json.Unmarshal(data, &req); err == nil {
-				requests = append(requests, req)
-			}
-		}
-
-		sort.Slice(requests, func(i, j int) bool {
-			return strings.ToLower(requests[i].Name) < strings.ToLower(requests[j].Name)
-		})
-
-		collections = append(collections, Collection{
-			ID:       "coll_" + sanitizeFileName(collName),
-			Name:     collName,
-			Requests: requests,
-		})
 	}
 
 	return collections, nil
 }
 
-// SaveRequest saves or updates a request JSON file inside its collection folder
-func (m *Manager) SaveRequest(req SavedRequest) error {
-	collName := strings.TrimSpace(req.Collection)
-	if collName == "" {
-		collName = "General"
+func (m *Manager) loadCollectionNode(dirPath, relPath, leafName string) (Collection, bool) {
+	entries, err := os.ReadDir(dirPath)
+	if err != nil {
+		return Collection{}, false
 	}
-	req.Collection = collName
+
+	var requests []SavedRequest
+	var folders []Collection
+
+	for _, entry := range entries {
+		name := entry.Name()
+		if strings.HasPrefix(name, ".") {
+			continue
+		}
+		if entry.IsDir() {
+			subRel := relPath + "/" + name
+			subNode, ok := m.loadCollectionNode(filepath.Join(dirPath, name), subRel, name)
+			if ok {
+				folders = append(folders, subNode)
+			}
+			continue
+		}
+		if !strings.HasSuffix(name, ".json") {
+			continue
+		}
+
+		data, err := os.ReadFile(filepath.Join(dirPath, name))
+		if err != nil {
+			continue
+		}
+		var req SavedRequest
+		if err := json.Unmarshal(data, &req); err == nil {
+			req.Collection = relPath
+			requests = append(requests, req)
+		}
+	}
+
+	sort.Slice(requests, func(i, j int) bool {
+		return strings.ToLower(requests[i].Name) < strings.ToLower(requests[j].Name)
+	})
+	sort.Slice(folders, func(i, j int) bool {
+		return strings.ToLower(folders[i].Name) < strings.ToLower(folders[j].Name)
+	})
+
+	return Collection{
+		ID:       "coll_" + sanitizeFileName(relPath),
+		Name:     leafName,
+		Path:     relPath,
+		Requests: requests,
+		Folders:  folders,
+	}, true
+}
+
+// SaveRequest saves or updates a request JSON file inside its collection or subfolder path
+func (m *Manager) SaveRequest(req SavedRequest) error {
+	relPath, collDir, err := m.resolveCollectionDir(req.Collection)
+	if err != nil {
+		relPath, collDir, err = m.resolveCollectionDir("General")
+		if err != nil {
+			return err
+		}
+	}
+	req.Collection = relPath
 	req.LastModifiedAt = time.Now().Unix()
 
-	collDir := filepath.Join(m.basePath, "collections", collName)
 	if err := os.MkdirAll(collDir, 0755); err != nil {
 		return fmt.Errorf("failed to create collection folder: %w", err)
 	}
@@ -180,100 +229,116 @@ func (m *Manager) SaveRequest(req SavedRequest) error {
 
 // DeleteRequest deletes a request file from disk
 func (m *Manager) DeleteRequest(id string, collectionName string) error {
-	if collectionName == "" {
+	if strings.TrimSpace(collectionName) == "" {
 		collectionName = "General"
 	}
+	_, collDir, err := m.resolveCollectionDir(collectionName)
+	if err != nil {
+		return err
+	}
 
-	filePath := filepath.Join(m.basePath, "collections", collectionName, id+".json")
+	filePath := filepath.Join(collDir, id+".json")
 	return os.Remove(filePath)
 }
 
-// CreateCollection creates a new empty collection folder on disk
+// CreateCollection creates a new empty collection or nested subfolder on disk
 func (m *Manager) CreateCollection(name string) error {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return fmt.Errorf("collection name cannot be empty")
+	_, dir, err := m.resolveCollectionDir(name)
+	if err != nil {
+		return err
 	}
-
-	dir := filepath.Join(m.basePath, "collections", name)
 	return os.MkdirAll(dir, 0755)
 }
 
-// RenameCollection renames a collection folder on disk and updates each saved request inside it
+// RenameCollection renames a collection or subfolder on disk and updates all requests under it
 func (m *Manager) RenameCollection(oldName, newName string) error {
-	oldName = strings.TrimSpace(oldName)
-	newName = strings.TrimSpace(newName)
-	if oldName == "" || newName == "" {
+	oldRel, oldDir, err := m.resolveCollectionDir(oldName)
+	if err != nil {
+		return err
+	}
+
+	trimmedNew := strings.TrimSpace(newName)
+	if trimmedNew == "" {
 		return fmt.Errorf("collection name cannot be empty")
 	}
-	if strings.ContainsAny(newName, "/\\") || newName == "." || newName == ".." {
-		return fmt.Errorf("invalid collection name %q", newName)
+
+	var targetRel string
+	if strings.ContainsAny(trimmedNew, "/\\") {
+		targetRel = trimmedNew
+	} else {
+		if trimmedNew == "." || trimmedNew == ".." {
+			return fmt.Errorf("invalid collection name %q", trimmedNew)
+		}
+		parent := path.Dir(oldRel)
+		if parent == "." {
+			targetRel = trimmedNew
+		} else {
+			targetRel = parent + "/" + trimmedNew
+		}
 	}
-	if oldName == newName {
+
+	newRel, newDir, err := m.resolveCollectionDir(targetRel)
+	if err != nil {
+		return err
+	}
+	if oldRel == newRel {
 		return nil
 	}
 
-	collectionsRoot := filepath.Join(m.basePath, "collections")
-	oldDir := filepath.Join(collectionsRoot, oldName)
-	newDir := filepath.Join(collectionsRoot, newName)
-
 	if _, err := os.Stat(oldDir); os.IsNotExist(err) {
-		return fmt.Errorf("collection %q not found", oldName)
+		return fmt.Errorf("collection %q not found", oldRel)
 	} else if err != nil {
 		return err
 	}
 
 	// On case-insensitive filesystems (macOS), allow case-only renames of the same folder
-	if !strings.EqualFold(oldName, newName) {
+	if !strings.EqualFold(oldRel, newRel) {
 		if _, err := os.Stat(newDir); err == nil {
-			return fmt.Errorf("collection %q already exists", newName)
+			return fmt.Errorf("collection %q already exists", newRel)
 		} else if !os.IsNotExist(err) {
 			return err
 		}
 	}
 
+	if err := os.MkdirAll(filepath.Dir(newDir), 0755); err != nil {
+		return err
+	}
 	if err := os.Rename(oldDir, newDir); err != nil {
 		return err
 	}
 
-	entries, err := os.ReadDir(newDir)
-	if err != nil {
-		return err
-	}
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
-			continue
+	return filepath.WalkDir(newDir, func(filePath string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil || d.IsDir() || !strings.HasSuffix(d.Name(), ".json") {
+			return walkErr
 		}
-		filePath := filepath.Join(newDir, entry.Name())
 		raw, err := os.ReadFile(filePath)
 		if err != nil {
 			return err
 		}
 		var req SavedRequest
 		if err := json.Unmarshal(raw, &req); err != nil {
-			continue
+			return nil
 		}
-		req.Collection = newName
+		relFileDir, err := filepath.Rel(newDir, filepath.Dir(filePath))
+		if err != nil || relFileDir == "." {
+			req.Collection = newRel
+		} else {
+			req.Collection = newRel + "/" + filepath.ToSlash(relFileDir)
+		}
 		updated, err := json.MarshalIndent(req, "", "  ")
 		if err != nil {
 			return err
 		}
-		if err := os.WriteFile(filePath, updated, 0644); err != nil {
-			return err
-		}
-	}
-
-	return nil
+		return os.WriteFile(filePath, updated, 0644)
+	})
 }
 
-// DeleteCollection deletes a collection folder and all its requests from disk
+// DeleteCollection deletes a collection or subfolder and all nested items from disk
 func (m *Manager) DeleteCollection(name string) error {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return fmt.Errorf("collection name cannot be empty")
+	_, dir, err := m.resolveCollectionDir(name)
+	if err != nil {
+		return err
 	}
-
-	dir := filepath.Join(m.basePath, "collections", name)
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		return nil
 	}

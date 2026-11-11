@@ -17,11 +17,13 @@ type SavedRequest struct {
 	LastModifiedAt     int64               `json:"lastModifiedAt"`
 }
 
-// Collection represents a group of requests stored in a folder
+// Collection represents a folder (and optional nested subfolders) of requests
 type Collection struct {
 	ID       string         `json:"id"`
 	Name     string         `json:"name"`
+	Path     string         `json:"path"`
 	Requests []SavedRequest `json:"requests"`
+	Folders  []Collection   `json:"folders,omitempty"`
 }
 
 // SavedEnvironment represents an environment file stored on disk

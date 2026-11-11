@@ -353,7 +353,9 @@ export namespace storage {
 	export class Collection {
 	    id: string;
 	    name: string;
+	    path: string;
 	    requests: SavedRequest[];
+	    folders?: Collection[];
 	
 	    static createFrom(source: any = {}) {
 	        return new Collection(source);
@@ -363,7 +365,9 @@ export namespace storage {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
 	        this.name = source["name"];
+	        this.path = source["path"];
 	        this.requests = this.convertValues(source["requests"], SavedRequest);
+	        this.folders = this.convertValues(source["folders"], Collection);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

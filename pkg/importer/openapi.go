@@ -25,41 +25,40 @@ var validOpenAPIMethods = map[string]bool{
 
 var methodOrder = []string{"get", "post", "put", "patch", "delete", "options", "head"}
 
-// parseOpenAPISpec automatically detects OpenAPI v3 (3.0/3.1) or OpenAPI v2 (Swagger 2.0)
-// in either JSON or YAML format and converts all endpoints into Pulse SavedRequests.
-func parseOpenAPISpec(content string) (bool, string, []storage.SavedRequest, error) {
+// parseOpenAPISpecWithFolders detects OpenAPI v2 or v3 (JSON/YAML) and preserves tag-based folders.
+func parseOpenAPISpecWithFolders(content string) (bool, ImportResult, error) {
 	rootMap, err := decodeStructuredSpec(content)
 	if err != nil || rootMap == nil {
-		return false, "", nil, nil
+		return false, ImportResult{}, nil
 	}
 
 	openapiVer := strings.TrimSpace(strVal(rootMap["openapi"]))
 	swaggerVer := strings.TrimSpace(strVal(rootMap["swagger"]))
 
 	if strings.HasPrefix(openapiVer, "3.") || strings.HasPrefix(openapiVer, "3") {
-		collName, reqs, err := parseOpenAPIv3Map(rootMap)
-		return true, collName, reqs, err
+		res, err := parseOpenAPIv3Map(rootMap)
+		return true, res, err
 	}
 	if strings.HasPrefix(swaggerVer, "2.") || strings.HasPrefix(swaggerVer, "2") {
-		collName, reqs, err := parseOpenAPIv2Map(rootMap)
-		return true, collName, reqs, err
+		res, err := parseOpenAPIv2Map(rootMap)
+		return true, res, err
 	}
 
 	// Fallback heuristic if "paths" exists without explicit version field
 	if _, hasPaths := rootMap["paths"]; hasPaths {
 		if _, hasServers := rootMap["servers"]; hasServers {
-			collName, reqs, err := parseOpenAPIv3Map(rootMap)
-			return true, collName, reqs, err
+			res, err := parseOpenAPIv3Map(rootMap)
+			return true, res, err
 		}
 		if _, hasComponents := rootMap["components"]; hasComponents {
-			collName, reqs, err := parseOpenAPIv3Map(rootMap)
-			return true, collName, reqs, err
+			res, err := parseOpenAPIv3Map(rootMap)
+			return true, res, err
 		}
-		collName, reqs, err := parseOpenAPIv2Map(rootMap)
-		return true, collName, reqs, err
+		res, err := parseOpenAPIv2Map(rootMap)
+		return true, res, err
 	}
 
-	return false, "", nil, nil
+	return false, ImportResult{}, nil
 }
 
 func decodeStructuredSpec(content string) (map[string]interface{}, error) {
@@ -114,12 +113,17 @@ func normalizeSpecValue(v interface{}) interface{} {
 	}
 }
 
-func parseOpenAPIv3Map(root map[string]interface{}) (string, []storage.SavedRequest, error) {
+func parseOpenAPIv3Map(root map[string]interface{}) (ImportResult, error) {
 	info := mapVal(root["info"])
-	collName := strings.TrimSpace(strVal(info["title"]))
-	if collName == "" {
-		collName = "Imported OpenAPI v3"
+	rawTitle := strings.TrimSpace(strVal(info["title"]))
+	collName := "Imported OpenAPI v3"
+	if rawTitle != "" {
+		collName = sanitizeFolderSegment(rawTitle)
 	}
+
+	seenFolders := map[string]bool{}
+	var folders []string
+	appendUniqueFolder(&folders, seenFolders, collName)
 
 	rootBaseURL := extractOpenAPIv3ServerURL(root)
 	rootSecurity := sliceVal(root["security"])
@@ -238,10 +242,19 @@ func parseOpenAPIv3Map(root map[string]interface{}) (string, []storage.SavedRequ
 				reqName = fmt.Sprintf("%s %s", method, cleanPath)
 			}
 
+			targetCollection := collName
+			if tags := sliceVal(op["tags"]); len(tags) > 0 {
+				firstTag := strings.TrimSpace(strVal(tags[0]))
+				if firstTag != "" {
+					targetCollection = collName + "/" + sanitizeFolderSegment(firstTag)
+					appendUniqueFolder(&folders, seenFolders, targetCollection)
+				}
+			}
+
 			requests = append(requests, storage.SavedRequest{
 				ID:             fmt.Sprintf("req_oa3_%d_%d", time.Now().UnixNano(), idx),
 				Name:           reqName,
-				Collection:     collName,
+				Collection:     targetCollection,
 				Method:         method,
 				URL:            fullURL,
 				Headers:        headers,
@@ -252,15 +265,24 @@ func parseOpenAPIv3Map(root map[string]interface{}) (string, []storage.SavedRequ
 		}
 	}
 
-	return collName, requests, nil
+	return ImportResult{
+		CollectionName: collName,
+		Folders:        folders,
+		Requests:       requests,
+	}, nil
 }
 
-func parseOpenAPIv2Map(root map[string]interface{}) (string, []storage.SavedRequest, error) {
+func parseOpenAPIv2Map(root map[string]interface{}) (ImportResult, error) {
 	info := mapVal(root["info"])
-	collName := strings.TrimSpace(strVal(info["title"]))
-	if collName == "" {
-		collName = "Imported OpenAPI v2"
+	rawTitle := strings.TrimSpace(strVal(info["title"]))
+	collName := "Imported OpenAPI v2"
+	if rawTitle != "" {
+		collName = sanitizeFolderSegment(rawTitle)
 	}
+
+	seenFolders := map[string]bool{}
+	var folders []string
+	appendUniqueFolder(&folders, seenFolders, collName)
 
 	scheme := "http"
 	if schemes := sliceVal(root["schemes"]); len(schemes) > 0 {
@@ -371,11 +393,20 @@ func parseOpenAPIv2Map(root map[string]interface{}) (string, []storage.SavedRequ
 				reqName = fmt.Sprintf("%s %s", method, opPath)
 			}
 
+			targetCollection := collName
+			if tags := sliceVal(op["tags"]); len(tags) > 0 {
+				firstTag := strings.TrimSpace(strVal(tags[0]))
+				if firstTag != "" {
+					targetCollection = collName + "/" + sanitizeFolderSegment(firstTag)
+					appendUniqueFolder(&folders, seenFolders, targetCollection)
+				}
+			}
+
 			fullURL := fmt.Sprintf("%s://%s%s%s", scheme, host, basePath, opPath)
 			requests = append(requests, storage.SavedRequest{
 				ID:             fmt.Sprintf("req_oa2_%d_%d", time.Now().UnixNano(), idx),
 				Name:           reqName,
-				Collection:     collName,
+				Collection:     targetCollection,
 				Method:         method,
 				URL:            fullURL,
 				Headers:        headers,
@@ -386,7 +417,11 @@ func parseOpenAPIv2Map(root map[string]interface{}) (string, []storage.SavedRequ
 		}
 	}
 
-	return collName, requests, nil
+	return ImportResult{
+		CollectionName: collName,
+		Folders:        folders,
+		Requests:       requests,
+	}, nil
 }
 
 func extractOpenAPIv3ServerURL(root map[string]interface{}) string {

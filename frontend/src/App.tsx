@@ -29,6 +29,98 @@ import {
 } from '../wailsjs/go/main/App';
 import { engine, storage } from '../wailsjs/go/models';
 
+const mapStorageRequest = (r: any, fallbackCollection: string): RequestItem => ({
+  id: r.id,
+  name: r.name,
+  collection: r.collection || fallbackCollection,
+  method: (r.method || 'GET') as HttpMethod,
+  url: r.url || '',
+  headers: r.headers || [],
+  queryParams: r.queryParams || [],
+  body: (() => {
+    const b = r.body || { type: 'none', raw: '' };
+    if (b.type === 'graphql' && b.raw) {
+      try {
+        const parsed = JSON.parse(b.raw);
+        if (parsed && typeof parsed === 'object' && ('query' in parsed || 'variables' in parsed)) {
+          return {
+            type: 'graphql' as const,
+            raw: b.raw,
+            graphqlQuery: parsed.query || '',
+            graphqlVariables: typeof parsed.variables === 'string' ? parsed.variables : JSON.stringify(parsed.variables || {}, null, 2),
+          };
+        }
+      } catch {}
+    }
+    return {
+      type: b.type || 'none',
+      raw: b.raw || '',
+      jsonBody: b.type === 'json' && !b.raw?.trim()?.startsWith('<') ? b.raw : undefined,
+      xmlBody: b.type === 'xml' && b.raw?.trim()?.startsWith('<') ? b.raw : undefined,
+      rawBody: b.type === 'raw' ? b.raw : undefined,
+      formBody: b.type === 'x-www-form-urlencoded' ? b.raw : undefined,
+      graphqlQuery: b.graphqlQuery,
+      graphqlVariables: b.graphqlVariables,
+    };
+  })(),
+  preRequestScript: r.preRequestScript || '',
+  postResponseScript: r.postResponseScript || '',
+  lastModifiedAt: r.lastModifiedAt,
+});
+
+const mapStorageCollection = (c: any): CollectionItem => {
+  const collPath = c.path || c.name;
+  return {
+    id: c.id,
+    name: c.name,
+    path: collPath,
+    requests: (c.requests || []).map((r: any) => mapStorageRequest(r, collPath)),
+    folders: (c.folders || []).map(mapStorageCollection),
+  };
+};
+
+const flattenRequests = (colls: CollectionItem[]): RequestItem[] => {
+  const out: RequestItem[] = [];
+  for (const c of colls) {
+    out.push(...c.requests);
+    if (c.folders?.length) {
+      out.push(...flattenRequests(c.folders));
+    }
+  }
+  return out;
+};
+
+const findCollectionInTree = (colls: CollectionItem[], target: string): CollectionItem | undefined => {
+  for (const c of colls) {
+    if ((c.path || c.name) === target || c.name === target) return c;
+    if (c.folders?.length) {
+      const hit = findCollectionInTree(c.folders, target);
+      if (hit) return hit;
+    }
+  }
+  return undefined;
+};
+
+const mapCollectionsTree = (
+  colls: CollectionItem[],
+  fn: (c: CollectionItem) => CollectionItem
+): CollectionItem[] =>
+  colls.map((c) => {
+    const next = fn(c);
+    return {
+      ...next,
+      folders: next.folders ? mapCollectionsTree(next.folders, fn) : undefined,
+    };
+  });
+
+const removeCollectionFromTree = (colls: CollectionItem[], targetPath: string): CollectionItem[] =>
+  colls
+    .filter((c) => (c.path || c.name) !== targetPath)
+    .map((c) => ({
+      ...c,
+      folders: c.folders ? removeCollectionFromTree(c.folders, targetPath) : undefined,
+    }));
+
 const FALLBACK_REQUEST: RequestItem = {
   id: 'req_demo',
   name: 'Get Products',
@@ -70,49 +162,8 @@ function Workspace() {
     try {
       const data = await LoadWorkspace();
       if (data) {
-        // Map collections
-        const mappedColls: CollectionItem[] = (data.collections || []).map((c: any) => ({
-          id: c.id,
-          name: c.name,
-          requests: (c.requests || []).map((r: any) => ({
-            id: r.id,
-            name: r.name,
-            collection: r.collection || c.name,
-            method: (r.method || 'GET') as HttpMethod,
-            url: r.url || '',
-            headers: r.headers || [],
-            queryParams: r.queryParams || [],
-            body: (() => {
-              const b = r.body || { type: 'none', raw: '' };
-              if (b.type === 'graphql' && b.raw) {
-                try {
-                  const parsed = JSON.parse(b.raw);
-                  if (parsed && typeof parsed === 'object' && ('query' in parsed || 'variables' in parsed)) {
-                    return {
-                      type: 'graphql' as const,
-                      raw: b.raw,
-                      graphqlQuery: parsed.query || '',
-                      graphqlVariables: typeof parsed.variables === 'string' ? parsed.variables : JSON.stringify(parsed.variables || {}, null, 2),
-                    };
-                  }
-                } catch {}
-              }
-              return {
-                type: b.type || 'none',
-                raw: b.raw || '',
-                jsonBody: b.type === 'json' && !b.raw?.trim()?.startsWith('<') ? b.raw : undefined,
-                xmlBody: b.type === 'xml' && b.raw?.trim()?.startsWith('<') ? b.raw : undefined,
-                rawBody: b.type === 'raw' ? b.raw : undefined,
-                formBody: b.type === 'x-www-form-urlencoded' ? b.raw : undefined,
-                graphqlQuery: b.graphqlQuery,
-                graphqlVariables: b.graphqlVariables,
-              };
-            })(),
-            preRequestScript: r.preRequestScript || '',
-            postResponseScript: r.postResponseScript || '',
-            lastModifiedAt: r.lastModifiedAt,
-          })),
-        }));
+        // Map hierarchical collections & folders
+        const mappedColls: CollectionItem[] = (data.collections || []).map(mapStorageCollection);
         setCollections(mappedColls);
 
         // Map environments
@@ -127,7 +178,7 @@ function Workspace() {
         setActiveEnvId((prevEnvId) => prevEnvId || mappedEnvs[0]?.id || '');
 
         // Set active request only on initial startup if still on unmodified fallback
-        const firstReq = mappedColls[0]?.requests[0];
+        const firstReq = flattenRequests(mappedColls)[0];
         if (firstReq) {
           setActiveRequest((prevReq) => {
             if (prevReq.id === FALLBACK_REQUEST.id && prevReq.method === FALLBACK_REQUEST.method && prevReq.url === FALLBACK_REQUEST.url) {
@@ -223,7 +274,7 @@ function Workspace() {
       prevTabs.map((t) => (t.id === targetId ? { ...t, name } : t))
     );
     setCollections((prevColls) =>
-      prevColls.map((c) => ({
+      mapCollectionsTree(prevColls, (c) => ({
         ...c,
         requests: c.requests.map((r) => (r.id === targetId ? { ...r, name } : r)),
       }))
@@ -245,7 +296,7 @@ function Workspace() {
       prevTabs.map((t) => (t.id === req.id ? { ...t, name: newName } : t))
     );
     setCollections((prevColls) =>
-      prevColls.map((c) => ({
+      mapCollectionsTree(prevColls, (c) => ({
         ...c,
         requests: c.requests.map((r) => (r.id === req.id ? { ...r, name: newName } : r)),
       }))
@@ -262,26 +313,21 @@ function Workspace() {
       prevTabs.map((t) => (t.id === updated.id ? updated : t))
     );
     setCollections((prevColls) =>
-      prevColls.map((c) => {
-        if (c.name === updated.collection) {
+      mapCollectionsTree(prevColls, (c) => {
+        const cPath = c.path || c.name;
+        if (cPath === updated.collection) {
           const exists = c.requests.some((r) => r.id === updated.id);
-          if (exists) {
-            return {
-              ...c,
-              requests: c.requests.map((r) => (r.id === updated.id ? updated : r)),
-            };
-          } else {
-            return {
-              ...c,
-              requests: [...c.requests, updated],
-            };
-          }
-        } else {
           return {
             ...c,
-            requests: c.requests.filter((r) => r.id !== updated.id),
+            requests: exists
+              ? c.requests.map((r) => (r.id === updated.id ? updated : r))
+              : [...c.requests, updated],
           };
         }
+        return {
+          ...c,
+          requests: c.requests.filter((r) => r.id !== updated.id),
+        };
       })
     );
 
@@ -302,12 +348,11 @@ function Workspace() {
 
   // Reload workspace and focus newly imported requests right after import
   const handleImportComplete = async () => {
-    const prevIds = new Set(collections.flatMap((c) => c.requests.map((r) => r.id)));
+    const prevIds = new Set(flattenRequests(collections).map((r) => r.id));
     const nextColls = await refreshWorkspace();
-    const newlyImported = nextColls
-      .flatMap((c) => c.requests)
-      .find((r) => !prevIds.has(r.id));
-    const targetReq = newlyImported || nextColls.flatMap((c) => c.requests)[0];
+    const allNextReqs = flattenRequests(nextColls);
+    const newlyImported = allNextReqs.find((r) => !prevIds.has(r.id));
+    const targetReq = newlyImported || allNextReqs[0];
     if (targetReq) {
       setActiveRequest(targetReq);
       setResponse(null);
@@ -389,8 +434,8 @@ function Workspace() {
 
   // Handle New Request - Immediately persists to disk and adds tab
   const handleNewRequest = async (collectionName: string) => {
-    const targetColl = collectionName || collections[0]?.name || 'Demo APIs';
-    const coll = collections.find((c) => c.name === targetColl);
+    const targetColl = collectionName || collections[0]?.path || collections[0]?.name || 'Demo APIs';
+    const coll = findCollectionInTree(collections, targetColl);
     const count = (coll?.requests.length || 0) + 1;
 
     const newReq: RequestItem = {
@@ -464,18 +509,30 @@ function Workspace() {
     }
   };
 
-  // Handle Rename Collection Folder
-  const handleRenameCollection = async (oldName: string, newName: string) => {
+  // Handle Rename Collection / Subfolder
+  const handleRenameCollection = async (oldPath: string, newName: string) => {
     const trimmed = newName.trim();
-    if (!trimmed || trimmed === oldName) return;
+    if (!trimmed || trimmed === oldPath) return;
+    const slashIdx = oldPath.lastIndexOf('/');
+    const newPath = trimmed.includes('/')
+      ? trimmed
+      : slashIdx >= 0
+        ? `${oldPath.slice(0, slashIdx)}/${trimmed}`
+        : trimmed;
+    if (newPath === oldPath) return;
+
+    const remapCollection = (col: string) => {
+      if (col === oldPath) return newPath;
+      if (col.startsWith(`${oldPath}/`)) return `${newPath}${col.slice(oldPath.length)}`;
+      return col;
+    };
+
     try {
-      await apiRenameCollection(oldName, trimmed);
+      await apiRenameCollection(oldPath, trimmed);
       setOpenTabs((prev) =>
-        prev.map((t) => (t.collection === oldName ? { ...t, collection: trimmed } : t))
+        prev.map((t) => ({ ...t, collection: remapCollection(t.collection) }))
       );
-      setActiveRequest((prev) =>
-        prev.collection === oldName ? { ...prev, collection: trimmed } : prev
-      );
+      setActiveRequest((prev) => ({ ...prev, collection: remapCollection(prev.collection) }));
       await refreshWorkspace();
     } catch (err) {
       console.error('Failed to rename collection:', err);
@@ -483,22 +540,22 @@ function Workspace() {
     }
   };
 
-  // Handle Delete Collection Folder
-  const handleDeleteCollection = async (name: string) => {
+  // Handle Delete Collection / Subfolder
+  const handleDeleteCollection = async (targetPath: string) => {
+    const matchesTarget = (col: string) =>
+      col === targetPath || col.startsWith(`${targetPath}/`);
+
     try {
-      // Optimistically update collections list immediately for instant UI responsiveness
-      setCollections((prev) => prev.filter((c) => c.name !== name));
-      
-      // Delete on disk
-      await apiDeleteCollection(name);
+      setCollections((prev) => removeCollectionFromTree(prev, targetPath));
+
+      await apiDeleteCollection(targetPath);
       await refreshWorkspace();
 
-      // Remove any open tabs belonging to this collection
       setOpenTabs((prev) => {
-        const remaining = prev.filter((t) => t.collection !== name);
+        const remaining = prev.filter((t) => !matchesTarget(t.collection));
         return remaining.length > 0 ? remaining : [FALLBACK_REQUEST];
       });
-      if (activeRequest.collection === name) {
+      if (matchesTarget(activeRequest.collection)) {
         setResponse(null);
         setActiveRequest(FALLBACK_REQUEST);
       }

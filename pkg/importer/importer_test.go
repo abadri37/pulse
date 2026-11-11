@@ -179,3 +179,75 @@ func TestParseCollectionJSON_AutoDetectsOpenAPIv2AndCollection(t *testing.T) {
 		t.Fatalf("Collection JSON failed: coll=%q reqs=%+v err=%v", collName2, reqs2, err2)
 	}
 }
+
+func TestParseCollectionWithFolders_PreservesExactHierarchy(t *testing.T) {
+	nestedSpec := `{
+  "info": { "name": "Enterprise Suite" },
+  "item": [
+    {
+      "name": "1. Auth",
+      "item": [
+        { "name": "Login", "request": { "method": "POST", "url": "http://localhost/login" } },
+        {
+          "name": "OAuth2",
+          "item": [
+            { "name": "Refresh Token", "request": { "method": "POST", "url": "http://localhost/oauth/refresh" } }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2. Empty Staging",
+      "item": []
+    },
+    {
+      "name": "Health Check",
+      "request": { "method": "GET", "url": "http://localhost/health" }
+    }
+  ]
+}`
+
+	res, err := ParseCollectionWithFolders(nestedSpec)
+	if err != nil {
+		t.Fatalf("ParseCollectionWithFolders failed: %v", err)
+	}
+	if res.CollectionName != "Enterprise Suite" {
+		t.Fatalf("unexpected CollectionName: %q", res.CollectionName)
+	}
+
+	wantFolders := map[string]bool{
+		"Enterprise Suite":                  true,
+		"Enterprise Suite/1. Auth":          true,
+		"Enterprise Suite/1. Auth/OAuth2":   true,
+		"Enterprise Suite/2. Empty Staging": true,
+	}
+	for f := range wantFolders {
+		found := false
+		for _, got := range res.Folders {
+			if got == f {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected folder %q in %v", f, res.Folders)
+		}
+	}
+
+	if len(res.Requests) != 3 {
+		t.Fatalf("expected 3 requests, got %d", len(res.Requests))
+	}
+	byName := map[string]string{}
+	for _, r := range res.Requests {
+		byName[r.Name] = r.Collection
+	}
+	if byName["Login"] != "Enterprise Suite/1. Auth" {
+		t.Fatalf("expected Login in 'Enterprise Suite/1. Auth', got %q", byName["Login"])
+	}
+	if byName["Refresh Token"] != "Enterprise Suite/1. Auth/OAuth2" {
+		t.Fatalf("expected Refresh Token in 'Enterprise Suite/1. Auth/OAuth2', got %q", byName["Refresh Token"])
+	}
+	if byName["Health Check"] != "Enterprise Suite" {
+		t.Fatalf("expected Health Check in 'Enterprise Suite', got %q", byName["Health Check"])
+	}
+}

@@ -58,3 +58,58 @@ func TestRenameCollection(t *testing.T) {
 		t.Fatalf("expected error when renaming to an existing collection")
 	}
 }
+
+func TestNestedFoldersLoadAndRename(t *testing.T) {
+	baseDir := t.TempDir()
+	mgr := &Manager{basePath: baseDir}
+
+	if err := mgr.CreateCollection("Suite/Auth/OAuth"); err != nil {
+		t.Fatalf("CreateCollection nested failed: %v", err)
+	}
+	if err := mgr.SaveRequest(SavedRequest{
+		ID:         "req_login",
+		Name:       "Login",
+		Collection: "Suite/Auth",
+		Method:     "POST",
+		URL:        "http://localhost/login",
+	}); err != nil {
+		t.Fatalf("SaveRequest Suite/Auth failed: %v", err)
+	}
+	if err := mgr.SaveRequest(SavedRequest{
+		ID:         "req_token",
+		Name:       "Token",
+		Collection: "Suite/Auth/OAuth",
+		Method:     "POST",
+		URL:        "http://localhost/oauth/token",
+	}); err != nil {
+		t.Fatalf("SaveRequest Suite/Auth/OAuth failed: %v", err)
+	}
+
+	colls, err := mgr.LoadCollections()
+	if err != nil || len(colls) != 1 {
+		t.Fatalf("expected 1 top-level collection, got %+v (err=%v)", colls, err)
+	}
+	if colls[0].Path != "Suite" || len(colls[0].Folders) != 1 || colls[0].Folders[0].Name != "Auth" {
+		t.Fatalf("unexpected hierarchy: %+v", colls[0])
+	}
+	authFolder := colls[0].Folders[0]
+	if len(authFolder.Requests) != 1 || len(authFolder.Folders) != 1 || authFolder.Folders[0].Path != "Suite/Auth/OAuth" {
+		t.Fatalf("unexpected Auth folder contents: %+v", authFolder)
+	}
+
+	// Rename subfolder in place: Suite/Auth -> Suite/Authentication
+	if err := mgr.RenameCollection("Suite/Auth", "Authentication"); err != nil {
+		t.Fatalf("RenameCollection subfolder failed: %v", err)
+	}
+	colls2, err := mgr.LoadCollections()
+	if err != nil {
+		t.Fatalf("LoadCollections after rename failed: %v", err)
+	}
+	renamedAuth := colls2[0].Folders[0]
+	if renamedAuth.Path != "Suite/Authentication" || renamedAuth.Requests[0].Collection != "Suite/Authentication" {
+		t.Fatalf("expected updated subfolder path, got %+v", renamedAuth)
+	}
+	if renamedAuth.Folders[0].Path != "Suite/Authentication/OAuth" || renamedAuth.Folders[0].Requests[0].Collection != "Suite/Authentication/OAuth" {
+		t.Fatalf("expected updated grandchild path, got %+v", renamedAuth.Folders[0])
+	}
+}

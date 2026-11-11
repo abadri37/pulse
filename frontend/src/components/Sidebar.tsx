@@ -92,6 +92,8 @@ export const Sidebar: React.FC<Props> = ({
   const [collapsedCollections, setCollapsedCollections] = useState<Record<string, boolean>>({});
   const [isCreatingColl, setIsCreatingColl] = useState(false);
   const [newCollName, setNewCollName] = useState('');
+  const [creatingSubfolderFor, setCreatingSubfolderFor] = useState<string | null>(null);
+  const [newSubfolderName, setNewSubfolderName] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [collToDelete, setCollToDelete] = useState<CollectionItem | null>(null);
   const [editingCollId, setEditingCollId] = useState<string | null>(null);
@@ -99,11 +101,19 @@ export const Sidebar: React.FC<Props> = ({
   const [editingReqId, setEditingReqId] = useState<string | null>(null);
   const [editingReqName, setEditingReqName] = useState('');
 
-  const toggleCollapse = (collId: string) => {
+  const toggleCollapse = (collKey: string) => {
     setCollapsedCollections((prev) => ({
       ...prev,
-      [collId]: !prev[collId],
+      [collKey]: !prev[collKey],
     }));
+  };
+
+  const countRequestsRecursive = (node: CollectionItem): number => {
+    let total = node.requests.length;
+    for (const sub of node.folders || []) {
+      total += countRequestsRecursive(sub);
+    }
+    return total;
   };
 
   const handleCreateSubmit = (e: React.FormEvent) => {
@@ -115,22 +125,370 @@ export const Sidebar: React.FC<Props> = ({
     }
   };
 
-  // Filter collections and requests by search query
+  const filterNode = (node: CollectionItem, q: string): CollectionItem | null => {
+    const nameMatches = node.name.toLowerCase().includes(q);
+    if (nameMatches) return node;
+
+    const matchingReqs = node.requests.filter(
+      (r) =>
+        r.name.toLowerCase().includes(q) ||
+        r.url.toLowerCase().includes(q) ||
+        r.method.toLowerCase().includes(q)
+    );
+    const matchingFolders = (node.folders || [])
+      .map((sub) => filterNode(sub, q))
+      .filter((x): x is CollectionItem => x !== null);
+
+    if (matchingReqs.length > 0 || matchingFolders.length > 0) {
+      return {
+        ...node,
+        requests: matchingReqs,
+        folders: matchingFolders,
+      };
+    }
+    return null;
+  };
+
+  // Filter collections, nested folders, and requests recursively by search query
   const filteredCollections = useMemo(() => {
     if (!searchQuery.trim()) return collections;
     const q = searchQuery.toLowerCase();
     return collections
-      .map((c) => ({
-        ...c,
-        requests: c.requests.filter(
-          (r) =>
-            r.name.toLowerCase().includes(q) ||
-            r.url.toLowerCase().includes(q) ||
-            r.method.toLowerCase().includes(q)
-        ),
-      }))
-      .filter((c) => c.requests.length > 0 || c.name.toLowerCase().includes(q));
+      .map((c) => filterNode(c, q))
+      .filter((x): x is CollectionItem => x !== null);
   }, [collections, searchQuery]);
+
+  const renderCollectionNode = (coll: CollectionItem, depth = 0): React.ReactNode => {
+    const collPath = coll.path || coll.name;
+    const isCollapsed = !searchQuery.trim() && !!collapsedCollections[collPath];
+    const totalRequests = countRequestsRecursive(coll);
+    const hasSubfolders = (coll.folders?.length || 0) > 0;
+
+    return (
+      <div key={collPath} className="flex flex-col">
+        {/* Collection / Folder Header Row */}
+        <div
+          onClick={() => {
+            if (editingCollId !== collPath) {
+              toggleCollapse(collPath);
+            }
+          }}
+          title={`${collPath} (${totalRequests} requests)`}
+          className={`group flex items-center justify-between gap-1.5 rounded-xl border px-2 py-1.5 cursor-pointer text-xs font-bold transition select-none ${
+            isDark
+              ? 'border-transparent text-neutral-200 hover:border-neutral-700/80 hover:bg-neutral-800/85 hover:text-white'
+              : 'border-transparent text-slate-800 hover:border-slate-300 hover:bg-slate-200/85 hover:text-slate-950'
+          }`}
+        >
+          <div className="flex items-center gap-1.5 flex-1 min-w-0">
+            {isCollapsed ? (
+              <ChevronRight className="h-3.5 w-3.5 text-neutral-500 shrink-0" />
+            ) : (
+              <ChevronDown className="h-3.5 w-3.5 text-neutral-500 shrink-0" />
+            )}
+            {isCollapsed ? (
+              <Folder className={`h-4 w-4 shrink-0 ${depth === 0 ? 'text-amber-500/80' : 'text-indigo-400/85'}`} />
+            ) : (
+              <FolderOpen className={`h-4 w-4 shrink-0 ${depth === 0 ? 'text-amber-400' : 'text-indigo-400'}`} />
+            )}
+            {editingCollId === collPath ? (
+              <input
+                type="text"
+                autoFocus
+                value={editingCollName}
+                onClick={(e) => e.stopPropagation()}
+                onChange={(e) => setEditingCollName(e.target.value)}
+                onBlur={() => {
+                  const trimmed = editingCollName.trim();
+                  if (trimmed && trimmed !== coll.name) {
+                    onRenameCollection(collPath, trimmed);
+                  }
+                  setEditingCollId(null);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.currentTarget.blur();
+                  } else if (e.key === 'Escape') {
+                    setEditingCollId(null);
+                  }
+                }}
+                className={`w-full rounded px-1.5 py-0.5 text-xs font-bold select-text focus:outline-none border ${
+                  isDark
+                    ? 'bg-neutral-900 border-violet-500 text-white'
+                    : 'bg-white border-violet-500 text-slate-900'
+                }`}
+              />
+            ) : (
+              <span
+                className="truncate"
+                onDoubleClick={(e) => {
+                  e.stopPropagation();
+                  setEditingCollId(collPath);
+                  setEditingCollName(coll.name);
+                }}
+                title={`${collPath} (Double-click to rename)`}
+              >
+                {coll.name}
+              </span>
+            )}
+            <span className={`shrink-0 text-[10px] font-bold px-1.5 py-0.2 rounded-full ${
+              isDark ? 'bg-neutral-800/90 text-neutral-400 group-hover:text-neutral-200' : 'bg-slate-200 text-slate-700 group-hover:text-slate-900'
+            }`}>
+              {totalRequests}
+            </span>
+          </div>
+
+          {/* Folder Actions: Rename, Add Subfolder, OA2, JSON, Add Request, Delete */}
+          <div className="flex items-center gap-0.5 opacity-80 group-hover:opacity-100 transition shrink-0">
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setEditingCollId(collPath);
+                setEditingCollName(coll.name);
+              }}
+              className={`rounded-lg p-1 transition ${
+                isDark ? 'text-neutral-400 hover:bg-neutral-700 hover:text-violet-400' : 'text-slate-600 hover:bg-slate-300 hover:text-violet-600'
+              }`}
+              title={`Rename "${coll.name}"`}
+            >
+              <Pencil className="h-3 w-3" />
+            </button>
+
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setCollapsedCollections((prev) => ({ ...prev, [collPath]: false }));
+                setCreatingSubfolderFor(collPath);
+                setNewSubfolderName('');
+              }}
+              className={`rounded-lg p-1 transition ${
+                isDark ? 'text-neutral-400 hover:bg-neutral-700 hover:text-amber-400' : 'text-slate-600 hover:bg-slate-300 hover:text-amber-600'
+              }`}
+              title={`Create subfolder inside "${coll.name}"`}
+            >
+              <FolderPlus className="h-3 w-3" />
+            </button>
+
+            {depth === 0 && (
+              <>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onExportCollectionOpenAPI(collPath);
+                  }}
+                  className={`rounded-lg px-1 py-0.5 text-[9px] font-black tracking-tight transition ${
+                    isDark ? 'text-cyan-400 hover:bg-neutral-700 hover:text-cyan-300' : 'text-cyan-700 hover:bg-slate-300'
+                  }`}
+                  title={`Export "${coll.name}" as OpenAPI v2 (Swagger 2.0) JSON`}
+                >
+                  OA2
+                </button>
+
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onExportCollection(collPath);
+                  }}
+                  className={`rounded-lg p-1 transition ${
+                    isDark ? 'text-neutral-400 hover:bg-neutral-700 hover:text-emerald-400' : 'text-slate-600 hover:bg-slate-300 hover:text-emerald-600'
+                  }`}
+                  title={`Export "${coll.name}" as Collection JSON (to ~/Downloads)`}
+                >
+                  <Download className="h-3 w-3" />
+                </button>
+              </>
+            )}
+
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setCollapsedCollections((prev) => ({ ...prev, [collPath]: false }));
+                onNewRequest(collPath);
+              }}
+              className={`rounded-lg p-1 transition ${
+                isDark ? 'text-neutral-400 hover:bg-neutral-700 hover:text-white' : 'text-slate-600 hover:bg-slate-300 hover:text-slate-900'
+              }`}
+              title={`Add request inside "${coll.name}"`}
+            >
+              <Plus className="h-3.5 w-3.5" />
+            </button>
+
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setCollToDelete(coll);
+              }}
+              className={`rounded-lg p-1 transition ${
+                isDark ? 'text-neutral-400 hover:bg-rose-500/20 hover:text-rose-400' : 'text-slate-600 hover:bg-rose-100 hover:text-rose-600'
+              }`}
+              title={`Delete "${coll.name}"`}
+            >
+              <Trash2 className="h-3 w-3" />
+            </button>
+          </div>
+        </div>
+
+        {/* Child Subfolders & Requests */}
+        {!isCollapsed && (
+          <div className={`ml-3.5 pl-2 border-l flex flex-col gap-1 mt-1 ${
+            isDark ? 'border-neutral-800/80' : 'border-slate-200'
+          }`}>
+            {creatingSubfolderFor === collPath && (
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const subName = newSubfolderName.trim();
+                  if (subName) {
+                    onCreateCollection(`${collPath}/${subName}`);
+                    setCreatingSubfolderFor(null);
+                    setNewSubfolderName('');
+                  }
+                }}
+                className="flex items-center gap-1 py-1"
+              >
+                <input
+                  type="text"
+                  autoFocus
+                  placeholder="Subfolder name..."
+                  value={newSubfolderName}
+                  onChange={(e) => setNewSubfolderName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape') {
+                      setCreatingSubfolderFor(null);
+                    }
+                  }}
+                  className={`flex-1 min-w-0 rounded-md border px-2 py-1 text-xs focus:outline-none ${
+                    isDark
+                      ? 'border-neutral-700 bg-neutral-900 text-neutral-100 focus:border-violet-500'
+                      : 'border-slate-300 bg-white text-neutral-900 focus:border-violet-500'
+                  }`}
+                />
+                <button
+                  type="submit"
+                  className={`rounded-md px-2 py-1 text-[10px] font-bold transition ${accentDef.buttonClass}`}
+                >
+                  Add
+                </button>
+              </form>
+            )}
+
+            {(coll.folders || []).map((sub) => renderCollectionNode(sub, depth + 1))}
+
+            {coll.requests.map((req) => {
+              const isActive = activeRequestId === req.id;
+              const methodStyle = METHOD_STYLES[req.method] || METHOD_STYLES.GET;
+
+              return (
+                <div
+                  key={req.id}
+                  onClick={() => onSelectRequest(req)}
+                  className={`group relative flex items-center justify-between rounded-xl px-2.5 py-1.5 cursor-pointer text-xs transition border ${
+                    isActive
+                      ? isDark
+                        ? 'border-violet-500/40 bg-violet-950/20 text-white font-bold shadow-xs'
+                        : 'border-violet-400 bg-violet-50 text-slate-900 font-bold shadow-xs'
+                      : isDark
+                        ? 'border-transparent text-neutral-400 hover:bg-neutral-800/50 hover:text-neutral-200'
+                        : 'border-transparent text-slate-600 hover:bg-slate-200/60 hover:text-slate-900'
+                  }`}
+                >
+                  {isActive && (
+                    <div className="absolute left-0 top-1 bottom-1 w-1 rounded-r-full bg-violet-500 shadow-sm shadow-violet-500/50" />
+                  )}
+
+                  <div className="flex items-center gap-2 truncate pl-1 flex-1 min-w-0">
+                    <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-md tracking-wider shrink-0 ${methodStyle.badge}`}>
+                      {req.method}
+                    </span>
+                    {editingReqId === req.id ? (
+                      <input
+                        type="text"
+                        autoFocus
+                        value={editingReqName}
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={(e) => setEditingReqName(e.target.value)}
+                        onBlur={() => {
+                          const trimmed = editingReqName.trim();
+                          if (trimmed && trimmed !== req.name) {
+                            onRenameRequest(req, trimmed);
+                          }
+                          setEditingReqId(null);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.currentTarget.blur();
+                          } else if (e.key === 'Escape') {
+                            setEditingReqId(null);
+                          }
+                        }}
+                        className={`w-full rounded px-1.5 py-0.5 text-xs font-semibold select-text focus:outline-none border ${
+                          isDark
+                            ? 'bg-neutral-900 border-violet-500 text-white'
+                            : 'bg-white border-violet-500 text-slate-900'
+                        }`}
+                      />
+                    ) : (
+                      <span
+                        className="truncate"
+                        onDoubleClick={(e) => {
+                          e.stopPropagation();
+                          setEditingReqId(req.id);
+                          setEditingReqName(req.name || '');
+                        }}
+                        title="Double-click to rename request"
+                      >
+                        {req.name || 'Untitled'}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-0.5 opacity-70 group-hover:opacity-100 transition shrink-0">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setEditingReqId(req.id);
+                        setEditingReqName(req.name || '');
+                      }}
+                      className="p-1 text-neutral-500 hover:text-violet-400 transition"
+                      title="Rename Request"
+                    >
+                      <Pencil className="h-3 w-3" />
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onExportRequest(req);
+                      }}
+                      className="p-1 text-neutral-500 hover:text-emerald-400 transition"
+                      title="Export Request as JSON (to ~/Downloads)"
+                    >
+                      <Download className="h-3 w-3" />
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onDeleteRequest(req.id, collPath);
+                      }}
+                      className="p-1 text-neutral-500 hover:text-rose-400 transition"
+                      title="Delete Request"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+
+            {coll.requests.length === 0 && !hasSubfolders && creatingSubfolderFor !== collPath && (
+              <div className="py-1.5 px-3 text-[11px] text-neutral-500 italic">
+                Empty folder. Click <strong className="text-neutral-400 font-semibold">+</strong> to add request.
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
     <aside className={`flex w-80 shrink-0 flex-col border-r select-none transition-colors duration-200 ${
@@ -238,283 +596,9 @@ export const Sidebar: React.FC<Props> = ({
         </form>
       )}
 
-      {/* 4. Collections & Requests Tree */}
+      {/* 4. Collections & Nested Folders Tree */}
       <div className="flex-1 overflow-y-auto p-2.5 flex flex-col gap-1.5">
-        {filteredCollections.map((coll) => {
-          const isCollapsed = !!collapsedCollections[coll.id];
-
-          return (
-            <div key={coll.id} className="flex flex-col">
-              {/* Collection Header Row */}
-              <div
-                onClick={() => {
-                  if (editingCollId !== coll.id) {
-                    toggleCollapse(coll.id);
-                  }
-                }}
-                title={`${coll.name} (${coll.requests.length} requests)`}
-                className={`group flex items-center justify-between gap-1.5 rounded-xl border px-2.5 py-1.5 cursor-pointer text-xs font-bold transition select-none ${
-                  isDark
-                    ? 'border-transparent text-neutral-200 hover:border-neutral-700/80 hover:bg-neutral-800/85 hover:text-white'
-                    : 'border-transparent text-slate-800 hover:border-slate-300 hover:bg-slate-200/85 hover:text-slate-950'
-                }`}
-              >
-                <div className="flex items-center gap-2 flex-1 min-w-0">
-                  {isCollapsed ? (
-                    <ChevronRight className="h-3.5 w-3.5 text-neutral-500 shrink-0" />
-                  ) : (
-                    <ChevronDown className="h-3.5 w-3.5 text-neutral-500 shrink-0" />
-                  )}
-                  {isCollapsed ? (
-                    <Folder className="h-4 w-4 text-amber-500/80 shrink-0" />
-                  ) : (
-                    <FolderOpen className="h-4 w-4 text-amber-400 shrink-0" />
-                  )}
-                  {editingCollId === coll.id ? (
-                    <input
-                      type="text"
-                      autoFocus
-                      value={editingCollName}
-                      onClick={(e) => e.stopPropagation()}
-                      onChange={(e) => setEditingCollName(e.target.value)}
-                      onBlur={() => {
-                        const trimmed = editingCollName.trim();
-                        if (trimmed && trimmed !== coll.name) {
-                          onRenameCollection(coll.name, trimmed);
-                        }
-                        setEditingCollId(null);
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          e.currentTarget.blur();
-                        } else if (e.key === 'Escape') {
-                          setEditingCollId(null);
-                        }
-                      }}
-                      className={`w-full rounded px-1.5 py-0.5 text-xs font-bold select-text focus:outline-none border ${
-                        isDark
-                          ? 'bg-neutral-900 border-violet-500 text-white'
-                          : 'bg-white border-violet-500 text-slate-900'
-                      }`}
-                    />
-                  ) : (
-                    <span
-                      className="truncate"
-                      onDoubleClick={(e) => {
-                        e.stopPropagation();
-                        setEditingCollId(coll.id);
-                        setEditingCollName(coll.name);
-                      }}
-                      title={`${coll.name} (Double-click to rename)`}
-                    >
-                      {coll.name}
-                    </span>
-                  )}
-                  <span className={`shrink-0 text-[10px] font-bold px-1.5 py-0.2 rounded-full ${
-                    isDark ? 'bg-neutral-800/90 text-neutral-400 group-hover:text-neutral-200' : 'bg-slate-200 text-slate-700 group-hover:text-slate-900'
-                  }`}>
-                    {coll.requests.length}
-                  </span>
-                </div>
-
-                {/* Collection Actions: Rename, OpenAPI v2, Collection JSON, Add Request, Delete */}
-                <div className="flex items-center gap-0.5 opacity-80 group-hover:opacity-100 transition shrink-0">
-                  {/* Rename Collection Button */}
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setEditingCollId(coll.id);
-                      setEditingCollName(coll.name);
-                    }}
-                    className={`rounded-lg p-1 transition ${
-                      isDark ? 'text-neutral-400 hover:bg-neutral-700 hover:text-violet-400' : 'text-slate-600 hover:bg-slate-300 hover:text-violet-600'
-                    }`}
-                    title={`Rename collection "${coll.name}"`}
-                  >
-                    <Pencil className="h-3.5 w-3.5" />
-                  </button>
-
-                  {/* Export Collection as OpenAPI v2 (Swagger 2.0) */}
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onExportCollectionOpenAPI(coll.name);
-                    }}
-                    className={`rounded-lg px-1.5 py-0.5 text-[9px] font-black tracking-tight transition ${
-                      isDark ? 'text-cyan-400 hover:bg-neutral-700 hover:text-cyan-300' : 'text-cyan-700 hover:bg-slate-300'
-                    }`}
-                    title={`Export "${coll.name}" as OpenAPI v2 (Swagger 2.0) JSON`}
-                  >
-                    OA2
-                  </button>
-
-                  {/* Export Collection as JSON */}
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onExportCollection(coll.name);
-                    }}
-                    className={`rounded-lg p-1 transition ${
-                      isDark ? 'text-neutral-400 hover:bg-neutral-700 hover:text-emerald-400' : 'text-slate-600 hover:bg-slate-300 hover:text-emerald-600'
-                    }`}
-                    title={`Export "${coll.name}" as Collection JSON (to ~/Downloads)`}
-                  >
-                    <Download className="h-3.5 w-3.5" />
-                  </button>
-
-                  {/* Add Request Button (+) */}
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onNewRequest(coll.name);
-                    }}
-                    className={`rounded-lg p-1 transition ${
-                      isDark ? 'text-neutral-400 hover:bg-neutral-700 hover:text-white' : 'text-slate-600 hover:bg-slate-300 hover:text-slate-900'
-                    }`}
-                    title={`Add request inside "${coll.name}"`}
-                  >
-                    <Plus className="h-3.5 w-3.5" />
-                  </button>
-
-                  {/* Delete Collection Button (Trash) */}
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setCollToDelete(coll);
-                    }}
-                    className={`rounded-lg p-1 transition ${
-                      isDark ? 'text-neutral-400 hover:bg-rose-500/20 hover:text-rose-400' : 'text-slate-600 hover:bg-rose-100 hover:text-rose-600'
-                    }`}
-                    title={`Delete collection "${coll.name}"`}
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              </div>
-
-              {/* Requests under this collection */}
-              {!isCollapsed && (
-                <div className={`ml-4 pl-2 border-l flex flex-col gap-1 mt-1 ${
-                  isDark ? 'border-neutral-800/80' : 'border-slate-200'
-                }`}>
-                  {coll.requests.map((req) => {
-                    const isActive = activeRequestId === req.id;
-                    const methodStyle = METHOD_STYLES[req.method] || METHOD_STYLES.GET;
-
-                    return (
-                      <div
-                        key={req.id}
-                        onClick={() => onSelectRequest(req)}
-                        className={`group relative flex items-center justify-between rounded-xl px-2.5 py-1.5 cursor-pointer text-xs transition border ${
-                          isActive
-                            ? isDark
-                              ? 'border-violet-500/40 bg-violet-950/20 text-white font-bold shadow-xs'
-                              : 'border-violet-400 bg-violet-50 text-slate-900 font-bold shadow-xs'
-                            : isDark
-                              ? 'border-transparent text-neutral-400 hover:bg-neutral-800/50 hover:text-neutral-200'
-                              : 'border-transparent text-slate-600 hover:bg-slate-200/60 hover:text-slate-900'
-                        }`}
-                      >
-                        {/* Active Left Indicator Pill */}
-                        {isActive && (
-                          <div className="absolute left-0 top-1 bottom-1 w-1 rounded-r-full bg-violet-500 shadow-sm shadow-violet-500/50" />
-                        )}
-
-                        <div className="flex items-center gap-2 truncate pl-1 flex-1 min-w-0">
-                          {/* Method Pill */}
-                          <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-md tracking-wider shrink-0 ${methodStyle.badge}`}>
-                            {req.method}
-                          </span>
-                          {editingReqId === req.id ? (
-                            <input
-                              type="text"
-                              autoFocus
-                              value={editingReqName}
-                              onClick={(e) => e.stopPropagation()}
-                              onChange={(e) => setEditingReqName(e.target.value)}
-                              onBlur={() => {
-                                const trimmed = editingReqName.trim();
-                                if (trimmed && trimmed !== req.name) {
-                                  onRenameRequest(req, trimmed);
-                                }
-                                setEditingReqId(null);
-                              }}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') {
-                                  e.currentTarget.blur();
-                                } else if (e.key === 'Escape') {
-                                  setEditingReqId(null);
-                                }
-                              }}
-                              className={`w-full rounded px-1.5 py-0.5 text-xs font-semibold select-text focus:outline-none border ${
-                                isDark
-                                  ? 'bg-neutral-900 border-violet-500 text-white'
-                                  : 'bg-white border-violet-500 text-slate-900'
-                              }`}
-                            />
-                          ) : (
-                            <span
-                              className="truncate"
-                              onDoubleClick={(e) => {
-                                e.stopPropagation();
-                                setEditingReqId(req.id);
-                                setEditingReqName(req.name || '');
-                              }}
-                              title="Double-click to rename request"
-                            >
-                              {req.name || 'Untitled'}
-                            </span>
-                          )}
-                        </div>
-
-                        {/* Request Actions: Rename, Export & Delete */}
-                        <div className="flex items-center gap-0.5 opacity-70 group-hover:opacity-100 transition shrink-0">
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setEditingReqId(req.id);
-                              setEditingReqName(req.name || '');
-                            }}
-                            className="p-1 text-neutral-500 hover:text-violet-400 transition"
-                            title="Rename Request"
-                          >
-                            <Pencil className="h-3 w-3" />
-                          </button>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onExportRequest(req);
-                            }}
-                            className="p-1 text-neutral-500 hover:text-emerald-400 transition"
-                            title="Export Request as JSON (to ~/Downloads)"
-                          >
-                            <Download className="h-3 w-3" />
-                          </button>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onDeleteRequest(req.id, coll.name);
-                            }}
-                            className="p-1 text-neutral-500 hover:text-rose-400 transition"
-                            title="Delete Request"
-                          >
-                            <Trash2 className="h-3 w-3" />
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
-
-                  {coll.requests.length === 0 && (
-                    <div className="py-2 px-3 text-[11px] text-neutral-500 italic">
-                      Empty folder. Click <strong className="text-neutral-400 font-semibold">+</strong> to add request.
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          );
-        })}
+        {filteredCollections.map((coll) => renderCollectionNode(coll, 0))}
 
         {filteredCollections.length === 0 && (
           <div className="p-6 text-center text-xs text-neutral-500 italic">
@@ -522,7 +606,6 @@ export const Sidebar: React.FC<Props> = ({
           </div>
         )}
       </div>
-
       {/* Delete Collection Confirmation Modal */}
       {collToDelete && (
         <div 
@@ -550,9 +633,9 @@ export const Sidebar: React.FC<Props> = ({
               <strong className={`px-1.5 py-0.5 rounded font-mono font-bold ${
                 isDark ? 'bg-neutral-800 text-white' : 'bg-slate-200 text-slate-900'
               }`}>
-                {collToDelete.name}
+                {collToDelete.path || collToDelete.name}
               </strong>{' '}
-              and all of its <span className="font-bold text-rose-500">{collToDelete.requests.length}</span> saved requests?
+              and all of its <span className="font-bold text-rose-500">{countRequestsRecursive(collToDelete)}</span> saved requests?
             </p>
 
             <div className="flex items-center justify-end gap-2">
@@ -570,9 +653,9 @@ export const Sidebar: React.FC<Props> = ({
               <button
                 type="button"
                 onClick={() => {
-                  const targetName = collToDelete.name;
+                  const targetPath = collToDelete.path || collToDelete.name;
                   setCollToDelete(null);
-                  onDeleteCollection(targetName);
+                  onDeleteCollection(targetPath);
                 }}
                 className="rounded-xl bg-rose-600 hover:bg-rose-500 px-3.5 py-1.5 text-xs font-black text-white shadow-md shadow-rose-600/30 transition-all hover:scale-105 cursor-pointer"
               >
