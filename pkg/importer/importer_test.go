@@ -282,3 +282,47 @@ func TestOpenAPIAndCollection_FourLevelNestedFolders(t *testing.T) {
 		}
 	}
 }
+
+func TestOpenAPI_StripsRedundantRootPrefixFromTagFolder(t *testing.T) {
+	oa3 := `{
+  "openapi": "3.0.1",
+  "info": { "title": "Kinto Global API" },
+  "paths": {
+    "/contracts": {
+      "get": {
+        "summary": "List Contracts",
+        "tags": ["Kinto Global API-Contract"]
+      }
+    },
+    "/documents": {
+      "get": {
+        "summary": "List Documents",
+        "tags": ["Document"]
+      }
+    },
+    "/drivers": {
+      "get": {
+        "summary": "List Drivers",
+        "tags": ["Kinto Global API/Driver/SubA"]
+      }
+    }
+  }
+}`
+	res, err := ParseCollectionWithFolders(oa3)
+	if err != nil {
+		t.Fatalf("ParseCollectionWithFolders failed: %v", err)
+	}
+	gotBySummary := map[string]string{}
+	for _, r := range res.Requests {
+		gotBySummary[r.Name] = r.Collection
+	}
+	if gotBySummary["List Contracts"] != "Kinto Global API/Contract" {
+		t.Fatalf("expected 'Kinto Global API/Contract', got %q", gotBySummary["List Contracts"])
+	}
+	if gotBySummary["List Documents"] != "Kinto Global API/Document" {
+		t.Fatalf("expected 'Kinto Global API/Document', got %q", gotBySummary["List Documents"])
+	}
+	if gotBySummary["List Drivers"] != "Kinto Global API/Driver/SubA" {
+		t.Fatalf("expected 'Kinto Global API/Driver/SubA', got %q", gotBySummary["List Drivers"])
+	}
+}

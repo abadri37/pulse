@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { X, Upload, FileText, CheckCircle2, AlertCircle, Terminal } from 'lucide-react';
-import { ImportCollectionJSON, ImportCSV, ImportCurlCommand } from '../../wailsjs/go/main/App';
+import { ImportCollectionIntoFolder, ImportCSV, ImportCurlCommand } from '../../wailsjs/go/main/App';
 import { useTheme } from '../context/ThemeContext';
 
 interface Props {
@@ -8,12 +8,20 @@ interface Props {
   onClose: () => void;
   onImportComplete: () => Promise<void> | void;
   initialTab?: 'collection' | 'csv' | 'curl';
+  availableFolders?: string[];
 }
 
-export const ImportModal: React.FC<Props> = ({ isOpen, onClose, onImportComplete, initialTab = 'collection' }) => {
+export const ImportModal: React.FC<Props> = ({
+  isOpen,
+  onClose,
+  onImportComplete,
+  initialTab = 'collection',
+  availableFolders = [],
+}) => {
   const { isDark, accentDef } = useTheme();
   const [tab, setTab] = useState<'collection' | 'csv' | 'curl'>(initialTab);
   const [content, setContent] = useState('');
+  const [parentFolder, setParentFolder] = useState('');
   const [targetCollectionName, setTargetCollectionName] = useState('Imported Endpoints');
   const [isLoading, setIsLoading] = useState(false);
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -52,7 +60,7 @@ export const ImportModal: React.FC<Props> = ({ isOpen, onClose, onImportComplete
 
     try {
       if (tab === 'collection') {
-        const count = await ImportCollectionJSON(content);
+        const count = await ImportCollectionIntoFolder(content, parentFolder);
         setStatusMessage({
           type: 'success',
           text: `Imported & auto-saved ${count} requests from Collection / OpenAPI spec!`,
@@ -166,16 +174,35 @@ export const ImportModal: React.FC<Props> = ({ isOpen, onClose, onImportComplete
           {tab === 'collection' && (
             <div className="flex flex-col gap-2">
               <span className="text-xs text-neutral-400">
-                Upload or paste a Collection (v2.0 / v2.1 JSON) or OpenAPI specification (v2 / v3.0 / v3.1 JSON or YAML). Pulse automatically detects the version and imports all endpoints.
+                Upload or paste a Collection (v2.0 / v2.1 JSON) or OpenAPI specification (v2 / v3.0 / v3.1 JSON or YAML). Pulse automatically detects the version and recreates all nested folders.
               </span>
-              <input
-                type="file"
-                accept=".json,.yaml,.yml"
-                onChange={handleFileUpload}
-                className="block w-full text-xs text-neutral-400 file:mr-4 file:py-1.5 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-indigo-600 file:text-white hover:file:bg-indigo-500 cursor-pointer"
-              />
+              <div className="flex items-center gap-3">
+                <input
+                  type="file"
+                  accept=".json,.yaml,.yml"
+                  onChange={handleFileUpload}
+                  className="block flex-1 text-xs text-neutral-400 file:mr-4 file:py-1.5 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-indigo-600 file:text-white hover:file:bg-indigo-500 cursor-pointer"
+                />
+                <input
+                  type="text"
+                  list="pulse-folder-targets"
+                  value={parentFolder}
+                  onChange={(e) => setParentFolder(e.target.value)}
+                  placeholder="Parent folder (optional)"
+                  title="Leave blank to import at root, or pick a parent folder like Kinto Global API"
+                  className={`w-56 rounded-xl border px-3 py-1.5 text-xs focus:outline-none ${
+                    isDark ? 'border-neutral-800 bg-neutral-950 text-white' : 'border-neutral-300 bg-white text-neutral-900'
+                  }`}
+                />
+              </div>
             </div>
           )}
+
+          <datalist id="pulse-folder-targets">
+            {availableFolders.map((f) => (
+              <option key={f} value={f} />
+            ))}
+          </datalist>
 
           {tab === 'csv' && (
             <div className="flex flex-col gap-3">
@@ -191,9 +218,10 @@ export const ImportModal: React.FC<Props> = ({ isOpen, onClose, onImportComplete
                 />
                 <input
                   type="text"
+                  list="pulse-folder-targets"
                   value={targetCollectionName}
                   onChange={(e) => setTargetCollectionName(e.target.value)}
-                  placeholder="Target Collection Folder"
+                  placeholder="Target Folder (e.g., Kinto Global API/Contract)"
                   className={`rounded-xl border px-3 py-1.5 text-xs focus:outline-none ${
                     isDark ? 'border-neutral-800 bg-neutral-950 text-white' : 'border-neutral-300 bg-white text-neutral-900'
                   }`}
@@ -209,9 +237,10 @@ export const ImportModal: React.FC<Props> = ({ isOpen, onClose, onImportComplete
               </span>
               <input
                 type="text"
+                list="pulse-folder-targets"
                 value={targetCollectionName}
                 onChange={(e) => setTargetCollectionName(e.target.value)}
-                placeholder="Target Collection Folder (e.g., Quick cURLs)"
+                placeholder="Target Folder (e.g., Kinto Global API/Contract)"
                 className={`rounded-xl border px-3 py-1.5 text-xs focus:outline-none ${
                   isDark ? 'border-neutral-800 bg-neutral-950 text-white' : 'border-neutral-300 bg-white text-neutral-900'
                 }`}

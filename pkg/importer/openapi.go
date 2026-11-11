@@ -425,6 +425,20 @@ func resolveOpenAPITagFolder(
 		return collName
 	}
 
+	// Strip redundant root collection prefix if tag repeats it (e.g. "Kinto Global API-Contract" or "Kinto Global API/Contract")
+	lowerTag := strings.ToLower(firstTag)
+	lowerRoot := strings.ToLower(collName)
+	for _, sep := range []string{"/", "\\", " - ", "-", "_", ":"} {
+		prefix := lowerRoot + sep
+		if strings.HasPrefix(lowerTag, prefix) {
+			stripped := strings.TrimSpace(firstTag[len(prefix):])
+			if stripped != "" {
+				firstTag = stripped
+				break
+			}
+		}
+	}
+
 	curPath := collName
 	for _, rawSeg := range strings.Split(strings.ReplaceAll(firstTag, "\\", "/"), "/") {
 		trimmed := strings.TrimSpace(rawSeg)

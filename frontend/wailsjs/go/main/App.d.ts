@@ -32,6 +32,8 @@ export function GetCookies(arg1:string):Promise<Array<engine.CookieItem>>;
 
 export function ImportCSV(arg1:string,arg2:string):Promise<number>;
 
+export function ImportCollectionIntoFolder(arg1:string,arg2:string):Promise<number>;
+
 export function ImportCollectionJSON(arg1:string):Promise<number>;
 
 export function ImportCurlCommand(arg1:string,arg2:string):Promise<storage.SavedRequest>;

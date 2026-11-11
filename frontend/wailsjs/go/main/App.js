@@ -58,6 +58,10 @@ export function ImportCSV(arg1, arg2) {
   return window['go']['main']['App']['ImportCSV'](arg1, arg2);
 }
 
+export function ImportCollectionIntoFolder(arg1, arg2) {
+  return window['go']['main']['App']['ImportCollectionIntoFolder'](arg1, arg2);
+}
+
 export function ImportCollectionJSON(arg1) {
   return window['go']['main']['App']['ImportCollectionJSON'](arg1);
 }

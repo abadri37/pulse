@@ -90,6 +90,17 @@ const flattenRequests = (colls: CollectionItem[]): RequestItem[] => {
   return out;
 };
 
+const flattenFolderPaths = (colls: CollectionItem[]): string[] => {
+  const out: string[] = [];
+  for (const c of colls) {
+    out.push(c.path || c.name);
+    if (c.folders?.length) {
+      out.push(...flattenFolderPaths(c.folders));
+    }
+  }
+  return out;
+};
+
 const findCollectionInTree = (colls: CollectionItem[], target: string): CollectionItem | undefined => {
   for (const c of colls) {
     if ((c.path || c.name) === target || c.name === target) return c;
@@ -904,6 +915,7 @@ function Workspace() {
         onClose={() => setIsImportModalOpen(false)}
         onImportComplete={handleImportComplete}
         initialTab={importInitialTab}
+        availableFolders={flattenFolderPaths(collections)}
       />
     </div>
   );

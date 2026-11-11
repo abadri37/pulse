@@ -399,6 +399,11 @@ func (a *App) DeleteEnvironment(id string) error {
 
 // ImportCollectionJSON auto-detects and imports Collection v2.0/v2.1 JSON, OpenAPI v2 (Swagger 2.0), or OpenAPI v3 (3.0/3.1 JSON/YAML) with full folder hierarchy into disk storage
 func (a *App) ImportCollectionJSON(jsonContent string) (int, error) {
+	return a.ImportCollectionIntoFolder(jsonContent, "")
+}
+
+// ImportCollectionIntoFolder imports a Collection or OpenAPI spec at root or nested inside parentFolder
+func (a *App) ImportCollectionIntoFolder(jsonContent string, parentFolder string) (int, error) {
 	if a.storage == nil {
 		return 0, fmt.Errorf("storage engine not initialized")
 	}
@@ -408,14 +413,39 @@ func (a *App) ImportCollectionJSON(jsonContent string) (int, error) {
 		return 0, err
 	}
 
+	cleanParent := strings.Trim(strings.ReplaceAll(strings.TrimSpace(parentFolder), "\\", "/"), "/")
+	remapPath := func(p string) string {
+		if cleanParent == "" {
+			return p
+		}
+		parentLeaf := cleanParent
+		if idx := strings.LastIndex(cleanParent, "/"); idx >= 0 {
+			parentLeaf = cleanParent[idx+1:]
+		}
+		// Avoid duplicating folder if root collection already matches target parent folder
+		if strings.EqualFold(p, res.CollectionName) && strings.EqualFold(res.CollectionName, parentLeaf) {
+			return cleanParent
+		}
+		prefix := res.CollectionName + "/"
+		if strings.EqualFold(res.CollectionName, parentLeaf) && len(p) > len(prefix) && strings.EqualFold(p[:len(prefix)], prefix) {
+			return cleanParent + "/" + p[len(prefix):]
+		}
+		return cleanParent + "/" + p
+	}
+
+	if cleanParent != "" {
+		_ = a.storage.CreateCollection(cleanParent)
+	}
 	for _, folderPath := range res.Folders {
-		if err := a.storage.CreateCollection(folderPath); err != nil {
-			return 0, fmt.Errorf("failed to create collection folder %q: %w", folderPath, err)
+		target := remapPath(folderPath)
+		if err := a.storage.CreateCollection(target); err != nil {
+			return 0, fmt.Errorf("failed to create collection folder %q: %w", target, err)
 		}
 	}
 
 	count := 0
 	for _, req := range res.Requests {
+		req.Collection = remapPath(req.Collection)
 		if err := a.storage.SaveRequest(req); err == nil {
 			count++
 		}
