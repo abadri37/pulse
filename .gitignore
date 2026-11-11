@@ -1,0 +1,37 @@
+# Compiled binaries and packaged desktop applications
+build/bin/
+build/bin
+*.app/
+*.exe
+*.dmg
+*.pkg
+*.deb
+*.rpm
+
+# Dependencies
+node_modules/
+frontend/node_modules/
+
+# Frontend production build output & Wails cache
+frontend/dist/
+frontend/package.json.md5
+dist/
+
+# Go build & test artifacts
+*.test
+*.out
+coverage.txt
+
+# Environment files
+.env
+.env.*
+
+# OS and Editor artifacts
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.log
