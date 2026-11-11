@@ -236,3 +236,159 @@ func TestAppImport_OpenAPIv3MultipleDirsWithDuplicatesInsideEachDir(t *testing.T
 		}
 	}
 }
+
+func TestAppImport_AtomAlphaBetaGammaWithDuplicateX(t *testing.T) {
+	specs := map[string]string{
+		"openapi_v3_multitag": `{
+  "openapi": "3.0.3",
+  "info": { "title": "Atom", "version": "1.0.0" },
+  "paths": {
+    "/x": {
+      "get": {
+        "summary": "X",
+        "tags": ["Atom/Alpha", "Atom-Beta", "Gamma"]
+      }
+    }
+  }
+}`,
+		"openapi_v3_separate_paths": `{
+  "openapi": "3.0.3",
+  "info": { "title": "Atom", "version": "1.0.0" },
+  "paths": {
+    "/alpha/x": { "get": { "summary": "X", "tags": ["Alpha"] } },
+    "/beta/x":  { "get": { "summary": "X", "tags": ["Atom/Beta"] } },
+    "/gamma/x": { "get": { "summary": "X", "tags": ["Atom-Gamma"] } }
+  }
+}`,
+		"folder_requests_v2": `{
+  "v": 2,
+  "name": "Atom",
+  "folders": [
+    { "name": "Alpha", "folders": [], "requests": [{ "name": "X", "method": "GET", "endpoint": "https://example.com/x" }] },
+    { "name": "Beta",  "folders": [], "requests": [{ "name": "X", "method": "GET", "endpoint": "https://example.com/x" }] },
+    { "name": "Gamma", "folders": [], "requests": [{ "name": "X", "method": "GET", "endpoint": "https://example.com/x" }] }
+  ],
+  "requests": []
+}`,
+	}
+
+	for name, spec := range specs {
+		t.Run(name, func(t *testing.T) {
+			store, err := storage.NewManagerWithBasePath(t.TempDir())
+			if err != nil {
+				t.Fatalf("NewManagerWithBasePath failed: %v", err)
+			}
+			app := &App{storage: store}
+
+			count, err := app.ImportCollectionJSON(spec)
+			if err != nil || count != 3 {
+				t.Fatalf("expected 3 requests imported for %s, got count=%d err=%v", name, count, err)
+			}
+			colls, err := store.LoadCollections()
+			if err != nil || len(colls) != 1 || colls[0].Name != "Atom" || len(colls[0].Folders) != 3 {
+				t.Fatalf("expected Atom with Alpha, Beta, Gamma folders for %s, got %+v (err=%v)", name, colls, err)
+			}
+			for _, f := range colls[0].Folders {
+				if len(f.Requests) != 1 || f.Requests[0].Name != "X" {
+					t.Fatalf("%s: expected request X inside folder %q, got %+v", name, f.Name, f.Requests)
+				}
+			}
+		})
+	}
+}
+
+func TestAppImport_KintoGlobalPhotoLayoutPreservesSharedRequestsAcrossUnitAccountDriverFleetManager(t *testing.T) {
+	store, err := storage.NewManagerWithBasePath(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewManagerWithBasePath failed: %v", err)
+	}
+	app := &App{storage: store}
+
+	oa3 := `{
+  "openapi": "3.0.3",
+  "info": { "title": "Kinto-Global-API", "version": "1.0.0" },
+  "paths": {
+    "/workspaces": {
+      "get": {
+        "summary": "Get Workspaces",
+        "tags": ["Kinto-Global-API-Unit-Account", "Kinto-Global-API-Driver", "Kinto-Global-API-Fleet-Manager"]
+      },
+      "delete": {
+        "summary": "Delete Workspace",
+        "tags": ["Driver"]
+      }
+    },
+    "/companies": {
+      "get": {
+        "summary": "Get Companies",
+        "tags": ["Unit-Account", "Driver"]
+      },
+      "delete": {
+        "summary": "Delete Companies",
+        "tags": ["Driver"]
+      }
+    },
+    "/company-departments": {
+      "get": { "summary": "Get Company Departments", "tags": ["Driver"] },
+      "post": { "summary": "Create Company Departments", "tags": ["Unit-Account"] }
+    },
+    "/company-custom-details": {
+      "get": { "summary": "Get Company Custom Details", "tags": ["Unit-Account"] }
+    },
+    "/addresses": {
+      "post": { "summary": "Create Addresses", "tags": ["Customer", "Driver"] }
+    },
+    "/drivers": {
+      "get": { "summary": "Get Drivers", "tags": ["Driver"] },
+      "post": { "summary": "Create Driver", "tags": ["Driver"] }
+    },
+    "/drivers/custom": {
+      "put": { "summary": "Update Driver Custom details", "tags": ["Driver"] }
+    },
+    "/drivers/company": {
+      "post": { "summary": "Create Driver Company", "tags": ["Driver"] }
+    },
+    "/drivers/contact": {
+      "post": { "summary": "Create Driver Contact", "tags": ["Driver"] }
+    },
+    "/users": {
+      "get": { "summary": "Get Users", "tags": ["Fleet-Manager"] },
+      "post": { "summary": "Create user", "tags": ["Customer", "Fleet-Manager"] }
+    },
+    "/users/member": {
+      "put": { "summary": "Update workspace member", "tags": ["Fleet-Manager"] }
+    },
+    "/users/contact": {
+      "post": { "summary": "Create user contact", "tags": ["Fleet-Manager"] }
+    }
+  }
+}`
+
+	count, err := app.ImportCollectionJSON(oa3)
+	if err != nil {
+		t.Fatalf("ImportCollectionJSON failed: %v", err)
+	}
+	if count != 22 {
+		t.Fatalf("expected 22 imported requests (Customer=2, Unit-Account=4, Driver=11, Fleet-Manager=5), got %d", count)
+	}
+
+	colls, err := store.LoadCollections()
+	if err != nil || len(colls) != 1 {
+		t.Fatalf("expected 1 root collection, got %+v (err=%v)", colls, err)
+	}
+	gotCounts := map[string]int{}
+	for _, f := range colls[0].Folders {
+		gotCounts[f.Name] = len(f.Requests)
+	}
+	wantCounts := map[string]int{
+		"Customer":      2,
+		"Unit-Account":  4,
+		"Driver":        11,
+		"Fleet-Manager": 5,
+	}
+	for dir, want := range wantCounts {
+		if gotCounts[dir] != want {
+			t.Fatalf("folder %q: expected %d requests, got %d (all=%+v)", dir, want, gotCounts[dir], gotCounts)
+		}
+	}
+}

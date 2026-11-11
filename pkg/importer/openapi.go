@@ -1,6 +1,7 @@
 package importer
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -72,6 +73,9 @@ func decodeStructuredSpec(content string) (map[string]interface{}, error) {
 		if err := json.Unmarshal([]byte(trimmed), &m); err != nil {
 			return nil, err
 		}
+		if entries := extractOrderedJSONPaths([]byte(trimmed)); len(entries) > 0 {
+			m["__ordered_paths"] = entries
+		}
 		return m, nil
 	}
 
@@ -131,13 +135,14 @@ func parseOpenAPIv3Map(root map[string]interface{}) (ImportResult, error) {
 	securitySchemes := mapVal(mapVal(root["components"])["securitySchemes"])
 
 	paths := mapVal(root["paths"])
-	pathKeys := sortedKeys(paths)
+	pathEntries := buildOpenAPIPathEntries(root, paths)
 
 	var requests []storage.SavedRequest
 	idx := 0
 
-	for _, rawPath := range pathKeys {
-		pathItem := resolveIfRef(root, mapVal(paths[rawPath]))
+	for _, entry := range pathEntries {
+		rawPath := entry.rawPath
+		pathItem := resolveIfRef(root, entry.pathItem)
 		if pathItem == nil {
 			continue
 		}
@@ -151,17 +156,13 @@ func parseOpenAPIv3Map(root map[string]interface{}) (ImportResult, error) {
 
 		pathParams := collectResolvedParams(root, sliceVal(pathItem["parameters"]))
 
-		for _, m := range methodOrder {
-			opRaw, exists := lookupMethodCaseInsensitive(pathItem, m)
-			if !exists {
-				continue
-			}
-			op := resolveIfRef(root, mapVal(opRaw))
+		for _, methodOp := range extractOrderedMethodOps(entry.pathItem, pathItem, entry.methodOps) {
+			op := resolveIfRef(root, methodOp.op)
 			if op == nil {
 				continue
 			}
 			idx++
-			method := strings.ToUpper(m)
+			method := strings.ToUpper(methodOp.methodLower)
 
 			opBaseURL := pathBaseURL
 			if opServers := sliceVal(op["servers"]); len(opServers) > 0 {
@@ -247,7 +248,7 @@ func parseOpenAPIv3Map(root map[string]interface{}) (ImportResult, error) {
 			for _, targetCollection := range targetCollections {
 				idx++
 				requests = append(requests, storage.SavedRequest{
-					ID:             fmt.Sprintf("req_oa3_%d_%d", time.Now().UnixNano(), idx),
+					ID:             nextImportID("req_oa3"),
 					Name:           reqName,
 					Collection:     targetCollection,
 					Method:         method,
@@ -294,13 +295,14 @@ func parseOpenAPIv2Map(root map[string]interface{}) (ImportResult, error) {
 	basePath := strings.TrimRight(strVal(root["basePath"]), "/")
 
 	paths := mapVal(root["paths"])
-	pathKeys := sortedKeys(paths)
+	pathEntries := buildOpenAPIPathEntries(root, paths)
 
 	var requests []storage.SavedRequest
 	idx := 0
 
-	for _, rawPath := range pathKeys {
-		pathItem := resolveIfRef(root, mapVal(paths[rawPath]))
+	for _, entry := range pathEntries {
+		rawPath := entry.rawPath
+		pathItem := resolveIfRef(root, entry.pathItem)
 		if pathItem == nil {
 			continue
 		}
@@ -311,17 +313,13 @@ func parseOpenAPIv2Map(root map[string]interface{}) (ImportResult, error) {
 
 		pathParams := collectResolvedParams(root, sliceVal(pathItem["parameters"]))
 
-		for _, m := range methodOrder {
-			opRaw, exists := lookupMethodCaseInsensitive(pathItem, m)
-			if !exists {
-				continue
-			}
-			op := resolveIfRef(root, mapVal(opRaw))
+		for _, methodOp := range extractOrderedMethodOps(entry.pathItem, pathItem, entry.methodOps) {
+			op := resolveIfRef(root, methodOp.op)
 			if op == nil {
 				continue
 			}
 			idx++
-			method := strings.ToUpper(m)
+			method := strings.ToUpper(methodOp.methodLower)
 
 			var headers []engine.HeaderPair
 			var queryParams []engine.ParamPair
@@ -396,7 +394,7 @@ func parseOpenAPIv2Map(root map[string]interface{}) (ImportResult, error) {
 			for _, targetCollection := range targetCollections {
 				idx++
 				requests = append(requests, storage.SavedRequest{
-					ID:             fmt.Sprintf("req_oa2_%d_%d", time.Now().UnixNano(), idx),
+					ID:             nextImportID("req_oa2"),
 					Name:           reqName,
 					Collection:     targetCollection,
 					Method:         method,
@@ -523,8 +521,15 @@ func resolveOpenAPITagFolders(
 	switch t := op["tags"].(type) {
 	case []interface{}:
 		for _, item := range t {
-			if s := strings.TrimSpace(strVal(item)); s != "" {
-				rawTagStrings = append(rawTagStrings, s)
+			switch v := item.(type) {
+			case map[string]interface{}:
+				if s := strings.TrimSpace(strVal(v["name"])); s != "" {
+					rawTagStrings = append(rawTagStrings, s)
+				}
+			default:
+				if s := strings.TrimSpace(strVal(item)); s != "" {
+					rawTagStrings = append(rawTagStrings, s)
+				}
 			}
 		}
 	case string:
@@ -550,6 +555,144 @@ func resolveOpenAPITagFolders(
 		return []string{collName}
 	}
 	return targets
+}
+
+type openAPIMethodOp struct {
+	methodLower string
+	op          map[string]interface{}
+}
+
+type openAPIPathEntry struct {
+	rawPath   string
+	pathItem  map[string]interface{}
+	methodOps []openAPIMethodOp
+}
+
+func buildOpenAPIPathEntries(root, paths map[string]interface{}) []openAPIPathEntry {
+	if ordered, ok := root["__ordered_paths"].([]openAPIPathEntry); ok && len(ordered) > 0 {
+		return ordered
+	}
+	pathKeys := sortedKeys(paths)
+	entries := make([]openAPIPathEntry, 0, len(pathKeys))
+	for _, rawPath := range pathKeys {
+		if pathItem := mapVal(paths[rawPath]); pathItem != nil {
+			entries = append(entries, openAPIPathEntry{rawPath: rawPath, pathItem: pathItem})
+		}
+	}
+	return entries
+}
+
+func extractOrderedMethodOps(
+	rawPathItem, resolvedPathItem map[string]interface{},
+	captured []openAPIMethodOp,
+) []openAPIMethodOp {
+	if len(captured) > 0 && rawPathItem != nil && strings.TrimSpace(strVal(rawPathItem["$ref"])) == "" {
+		return captured
+	}
+	var ops []openAPIMethodOp
+	for _, m := range methodOrder {
+		if opRaw, exists := lookupMethodCaseInsensitive(resolvedPathItem, m); exists {
+			if opMap := mapVal(opRaw); opMap != nil {
+				ops = append(ops, openAPIMethodOp{methodLower: m, op: opMap})
+			}
+		}
+	}
+	return ops
+}
+
+// extractOrderedJSONPaths walks raw JSON tokens inside "paths" so duplicate path keys
+// or duplicate HTTP method keys inside a pathItem are all preserved rather than overwritten.
+func extractOrderedJSONPaths(raw []byte) []openAPIPathEntry {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	tok, err := dec.Token()
+	if err != nil {
+		return nil
+	}
+	delim, ok := tok.(json.Delim)
+	if !ok || delim != '{' {
+		return nil
+	}
+
+	var entries []openAPIPathEntry
+	for dec.More() {
+		keyTok, err := dec.Token()
+		if err != nil {
+			return nil
+		}
+		key, _ := keyTok.(string)
+		if key != "paths" {
+			var skip json.RawMessage
+			if err := dec.Decode(&skip); err != nil {
+				return nil
+			}
+			continue
+		}
+
+		pTok, err := dec.Token()
+		if err != nil {
+			return nil
+		}
+		pDelim, ok := pTok.(json.Delim)
+		if !ok || pDelim != '{' {
+			return nil
+		}
+
+		for dec.More() {
+			pathKeyTok, err := dec.Token()
+			if err != nil {
+				return nil
+			}
+			rawPath, _ := pathKeyTok.(string)
+			var rawItem json.RawMessage
+			if err := dec.Decode(&rawItem); err != nil {
+				continue
+			}
+			var itemMap map[string]interface{}
+			if err := json.Unmarshal(rawItem, &itemMap); err != nil || itemMap == nil {
+				continue
+			}
+			entries = append(entries, openAPIPathEntry{
+				rawPath:   rawPath,
+				pathItem:  itemMap,
+				methodOps: extractOrderedJSONMethodOps(rawItem),
+			})
+		}
+		break
+	}
+	return entries
+}
+
+func extractOrderedJSONMethodOps(rawItem []byte) []openAPIMethodOp {
+	dec := json.NewDecoder(bytes.NewReader(rawItem))
+	tok, err := dec.Token()
+	if err != nil {
+		return nil
+	}
+	delim, ok := tok.(json.Delim)
+	if !ok || delim != '{' {
+		return nil
+	}
+	var ops []openAPIMethodOp
+	for dec.More() {
+		kTok, err := dec.Token()
+		if err != nil {
+			return ops
+		}
+		kStr, _ := kTok.(string)
+		var rawVal json.RawMessage
+		if err := dec.Decode(&rawVal); err != nil {
+			return ops
+		}
+		lowerKey := strings.ToLower(strings.TrimSpace(kStr))
+		if !validOpenAPIMethods[lowerKey] {
+			continue
+		}
+		var opMap map[string]interface{}
+		if err := json.Unmarshal(rawVal, &opMap); err == nil && opMap != nil {
+			ops = append(ops, openAPIMethodOp{methodLower: lowerKey, op: opMap})
+		}
+	}
+	return ops
 }
 
 func extractOpenAPIv3ServerURL(root map[string]interface{}) string {

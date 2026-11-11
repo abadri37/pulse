@@ -426,3 +426,76 @@ func TestOpenAPIv3_BOMRootTagAndDeclaredEmptyFolders(t *testing.T) {
 		t.Fatalf("expected declared empty tag folder in %v", res.Folders)
 	}
 }
+
+func TestOpenAPIv3_DuplicatePathKeysDuplicateMethodKeysAndTagObjects(t *testing.T) {
+	oa3 := `{
+  "openapi": "3.0.3",
+  "info": { "title": "Kinto-Global-API" },
+  "paths": {
+    "/workspaces": {
+      "get": { "summary": "Get Workspaces", "tags": ["Unit-Account"] }
+    },
+    "/workspaces": {
+      "get": { "summary": "Get Workspaces", "tags": ["Driver"] },
+      "get": { "summary": "Get Workspaces", "tags": [{ "name": "Fleet-Manager" }] }
+    }
+  }
+}`
+	res, err := ParseCollectionWithFolders(oa3)
+	if err != nil {
+		t.Fatalf("ParseCollectionWithFolders failed: %v", err)
+	}
+	if len(res.Requests) != 3 {
+		t.Fatalf("expected all 3 duplicate-key requests preserved, got %d: %+v", len(res.Requests), res.Requests)
+	}
+	seenIDs := map[string]bool{}
+	seenDirs := map[string]bool{}
+	for _, r := range res.Requests {
+		if seenIDs[r.ID] {
+			t.Fatalf("duplicate request ID %q", r.ID)
+		}
+		seenIDs[r.ID] = true
+		seenDirs[r.Collection] = true
+	}
+	for _, wantDir := range []string{
+		"Kinto-Global-API/Unit-Account",
+		"Kinto-Global-API/Driver",
+		"Kinto-Global-API/Fleet-Manager",
+	} {
+		if !seenDirs[wantDir] {
+			t.Fatalf("missing folder %q in %+v", wantDir, seenDirs)
+		}
+	}
+}
+
+func TestCollectionArray_ImportsAllCollectionsWithUniqueIDs(t *testing.T) {
+	arr := `[
+  {
+    "v": 2,
+    "name": "Kinto-Global-API",
+    "folders": [
+      { "name": "Unit-Account", "requests": [{ "name": "Get Workspaces", "method": "GET", "endpoint": "https://api.example.com/workspaces" }] },
+      { "name": "Driver", "requests": [{ "name": "Get Workspaces", "method": "GET", "endpoint": "https://api.example.com/workspaces" }] }
+    ]
+  },
+  {
+    "v": 2,
+    "name": "POC",
+    "requests": [{ "name": "CreateVehicleMileage", "method": "POST", "endpoint": "https://api.example.com/mileage" }]
+  }
+]`
+	res, err := ParseCollectionWithFolders(arr)
+	if err != nil {
+		t.Fatalf("ParseCollectionWithFolders array failed: %v", err)
+	}
+	if len(res.Requests) != 3 {
+		t.Fatalf("expected 3 requests from JSON array, got %d", len(res.Requests))
+	}
+	seenIDs := map[string]bool{}
+	for _, r := range res.Requests {
+		if seenIDs[r.ID] {
+			t.Fatalf("duplicate ID %q in array import", r.ID)
+		}
+		seenIDs[r.ID] = true
+	}
+}

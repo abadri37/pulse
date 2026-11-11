@@ -7,8 +7,16 @@ import (
 	"pulse/pkg/engine"
 	"pulse/pkg/storage"
 	"strings"
+	"sync/atomic"
 	"time"
 )
+
+var importIDCounter uint64
+
+func nextImportID(prefix string) string {
+	seq := atomic.AddUint64(&importIDCounter, 1)
+	return fmt.Sprintf("%s_%d_%d", prefix, time.Now().UnixNano(), seq)
+}
 
 // CollectionDocument represents the Collection v2.0 / v2.1 JSON schema
 type CollectionDocument struct {
@@ -128,6 +136,11 @@ func appendUniqueFolder(folders *[]string, seen map[string]bool, path string) {
 // while preserving the full nested folder hierarchy.
 func ParseCollectionWithFolders(content string) (ImportResult, error) {
 	cleaned := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(content), "\ufeff"))
+	if strings.HasPrefix(cleaned, "[") {
+		if res, ok := parseCollectionArray(cleaned); ok {
+			return res, nil
+		}
+	}
 	if matched, res, err := parseOpenAPISpecWithFolders(cleaned); matched {
 		return res, err
 	}
@@ -162,6 +175,38 @@ func ParseCollectionWithFolders(content string) (ImportResult, error) {
 		Folders:        folders,
 		Requests:       requests,
 	}, nil
+}
+
+func parseCollectionArray(cleaned string) (ImportResult, bool) {
+	var rawItems []json.RawMessage
+	if err := json.Unmarshal([]byte(cleaned), &rawItems); err != nil || len(rawItems) == 0 {
+		return ImportResult{}, false
+	}
+	seenFolders := map[string]bool{}
+	var allFolders []string
+	var allRequests []storage.SavedRequest
+	firstName := ""
+	for _, rawItem := range rawItems {
+		res, err := ParseCollectionWithFolders(string(rawItem))
+		if err != nil {
+			continue
+		}
+		if firstName == "" {
+			firstName = res.CollectionName
+		}
+		for _, f := range res.Folders {
+			appendUniqueFolder(&allFolders, seenFolders, f)
+		}
+		allRequests = append(allRequests, res.Requests...)
+	}
+	if len(allFolders) == 0 && len(allRequests) == 0 {
+		return ImportResult{}, false
+	}
+	return ImportResult{
+		CollectionName: firstName,
+		Folders:        allFolders,
+		Requests:       allRequests,
+	}, true
 }
 
 func convertFolderRequestsDoc(doc folderRequestsDocument) ImportResult {
@@ -217,7 +262,7 @@ func convertFolderRequestsDoc(doc folderRequestsDocument) ImportResult {
 				}
 			}
 			requests = append(requests, storage.SavedRequest{
-				ID:                 fmt.Sprintf("req_coll_%d_%d", time.Now().UnixNano(), len(requests)),
+				ID:                 nextImportID("req_coll"),
 				Name:               r.Name,
 				Collection:         curPath,
 				Method:             method,
@@ -371,7 +416,7 @@ func convertCollectionRequest(name string, collection string, spec *CollectionRe
 	}
 
 	return storage.SavedRequest{
-		ID:                 fmt.Sprintf("req_coll_%d_%d", time.Now().UnixNano(), idx),
+		ID:                 nextImportID("req_coll"),
 		Name:               name,
 		Collection:         collection,
 		Method:             method,
