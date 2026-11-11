@@ -328,6 +328,44 @@ func (m *Manager) DeleteRequest(id string, collectionName string) error {
 	return os.Remove(filePath)
 }
 
+// MoveRequest moves a saved request from fromCollection to toCollection on disk.
+func (m *Manager) MoveRequest(id, fromCollection, toCollection string) (SavedRequest, error) {
+	if strings.TrimSpace(id) == "" {
+		return SavedRequest{}, fmt.Errorf("request id cannot be empty")
+	}
+	fromRel, fromDir, err := m.resolveCollectionDir(fromCollection)
+	if err != nil {
+		return SavedRequest{}, err
+	}
+	toRel, _, err := m.resolveCollectionDir(toCollection)
+	if err != nil {
+		return SavedRequest{}, err
+	}
+
+	srcFile := filepath.Join(fromDir, id+".json")
+	data, err := os.ReadFile(srcFile)
+	if err != nil {
+		return SavedRequest{}, fmt.Errorf("failed to read source request: %w", err)
+	}
+	var req SavedRequest
+	if err := json.Unmarshal(data, &req); err != nil {
+		return SavedRequest{}, fmt.Errorf("failed to parse source request: %w", err)
+	}
+	if fromRel == toRel {
+		req.Collection = toRel
+		return req, nil
+	}
+
+	req.Collection = toRel
+	if err := m.SaveRequest(req); err != nil {
+		return SavedRequest{}, fmt.Errorf("failed to save moved request: %w", err)
+	}
+	if err := os.Remove(srcFile); err != nil && !os.IsNotExist(err) {
+		return SavedRequest{}, fmt.Errorf("failed to remove original request: %w", err)
+	}
+	return req, nil
+}
+
 // CreateCollection creates a new empty collection or nested subfolder on disk
 func (m *Manager) CreateCollection(name string) error {
 	_, dir, err := m.resolveCollectionDir(name)

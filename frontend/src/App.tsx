@@ -14,6 +14,7 @@ import {
   LoadWorkspace,
   SaveRequest as apiSaveRequest,
   DeleteRequest as apiDeleteRequest,
+  MoveRequest as apiMoveRequest,
   CreateCollection as apiCreateCollection,
   RenameCollection as apiRenameCollection,
   DeleteCollection as apiDeleteCollection,
@@ -516,13 +517,71 @@ function Workspace() {
   const handleDeleteRequest = async (id: string, collectionName: string) => {
     try {
       await apiDeleteRequest(id, collectionName);
-      await refreshWorkspace();
-      setOpenTabs((prev) => prev.filter((t) => t.id !== id));
-      if (activeRequest.id === id) {
-        setResponse(null);
+      const nextColls = await refreshWorkspace();
+      const remainingTabs = openTabs.filter((t) => t.id !== id);
+      if (remainingTabs.length === 0) {
+        const nextFirst = flattenRequests(nextColls)[0] || FALLBACK_REQUEST;
+        setOpenTabs([nextFirst]);
+        if (activeRequest.id === id) {
+          setActiveRequest(nextFirst);
+          setResponse(null);
+        }
+      } else {
+        setOpenTabs(remainingTabs);
+        if (activeRequest.id === id) {
+          setActiveRequest(remainingTabs[remainingTabs.length - 1]);
+          setResponse(null);
+        }
       }
     } catch (err) {
       console.error('Failed to delete request:', err);
+    }
+  };
+
+  // Handle Copy -> Paste Request into a target folder/collection
+  const handlePasteRequest = async (sourceReq: RequestItem, targetCollection: string) => {
+    const destColl = targetCollection || collections[0]?.path || collections[0]?.name || 'General';
+    const clonedReq: RequestItem = {
+      ...sourceReq,
+      id: `req_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      collection: destColl,
+      headers: (sourceReq.headers || []).map((h) => ({ ...h })),
+      queryParams: (sourceReq.queryParams || []).map((p) => ({ ...p })),
+      body: { ...sourceReq.body },
+      lastModifiedAt: Date.now(),
+    };
+
+    try {
+      await apiSaveRequest(toSavedRequest(clonedReq));
+      await refreshWorkspace();
+      setActiveRequest(clonedReq);
+      setOpenTabs((prev) => [...prev, clonedReq]);
+      setResponse(null);
+    } catch (err) {
+      console.error('Failed to paste request:', err);
+    }
+  };
+
+  // Handle Drag & Move Request from one directory to another
+  const handleMoveRequest = async (req: RequestItem, targetCollection: string) => {
+    if (!targetCollection || req.collection === targetCollection) {
+      return;
+    }
+    try {
+      await apiMoveRequest(req.id, req.collection, targetCollection);
+      const updatedReq: RequestItem = { ...req, collection: targetCollection };
+      setOpenTabs((prev) =>
+        prev.map((t) => (t.id === req.id ? { ...t, collection: targetCollection } : t))
+      );
+      if (activeRequest.id === req.id) {
+        setActiveRequest((prev) => ({ ...prev, collection: targetCollection }));
+      }
+      await refreshWorkspace();
+      if (activeRequest.id === req.id) {
+        setActiveRequest(updatedReq);
+      }
+    } catch (err) {
+      console.error('Failed to move request:', err);
     }
   };
 
@@ -814,6 +873,8 @@ function Workspace() {
           onExportRequest={handleExportRequest}
           onRenameRequest={handleRenameRequest}
           onDeleteRequest={handleDeleteRequest}
+          onPasteRequest={handlePasteRequest}
+          onMoveRequest={handleMoveRequest}
           onOpenImport={() => {
             setImportInitialTab('collection');
             setIsImportModalOpen(true);

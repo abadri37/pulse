@@ -16,6 +16,8 @@ import {
   Download,
   AlertTriangle,
   Pencil,
+  Copy,
+  ClipboardPaste,
 } from 'lucide-react';
 
 interface Props {
@@ -31,6 +33,8 @@ interface Props {
   onExportRequest: (req: RequestItem) => void;
   onRenameRequest: (req: RequestItem, newName: string) => void;
   onDeleteRequest: (id: string, collectionName: string) => void;
+  onPasteRequest: (req: RequestItem, targetCollection: string) => void;
+  onMoveRequest: (req: RequestItem, targetCollection: string) => void;
   onOpenImport: () => void;
 }
 
@@ -86,6 +90,8 @@ export const Sidebar: React.FC<Props> = ({
   onExportRequest,
   onRenameRequest,
   onDeleteRequest,
+  onPasteRequest,
+  onMoveRequest,
   onOpenImport,
 }) => {
   const { isDark, accentDef } = useTheme();
@@ -102,6 +108,28 @@ export const Sidebar: React.FC<Props> = ({
   const [editingCollName, setEditingCollName] = useState('');
   const [editingReqId, setEditingReqId] = useState<string | null>(null);
   const [editingReqName, setEditingReqName] = useState('');
+  const [copiedRequest, setCopiedRequest] = useState<RequestItem | null>(null);
+  const [draggingReq, setDraggingReq] = useState<{ req: RequestItem; fromCollection: string } | null>(null);
+  const [dragOverFolder, setDragOverFolder] = useState<string | null>(null);
+  const [contextMenu, setContextMenu] = useState<
+    | { x: number; y: number; kind: 'request'; req: RequestItem; collPath: string }
+    | { x: number; y: number; kind: 'folder'; coll: CollectionItem; collPath: string }
+    | null
+  >(null);
+
+  useEffect(() => {
+    if (!contextMenu) return;
+    const dismiss = () => setContextMenu(null);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') dismiss();
+    };
+    window.addEventListener('click', dismiss);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('click', dismiss);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [contextMenu]);
 
   useEffect(() => {
     const onMouseMove = (e: MouseEvent) => {
@@ -186,6 +214,7 @@ export const Sidebar: React.FC<Props> = ({
     const isCollapsed = !searchQuery.trim() && !!collapsedCollections[collPath];
     const totalRequests = countRequestsRecursive(coll);
     const hasSubfolders = (coll.folders?.length || 0) > 0;
+    const isDropTarget = dragOverFolder === collPath && draggingReq?.fromCollection !== collPath;
 
     return (
       <div key={collPath} className="flex flex-col">
@@ -196,11 +225,44 @@ export const Sidebar: React.FC<Props> = ({
               toggleCollapse(collPath);
             }
           }}
-          title={`${collPath} (${totalRequests} requests)`}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setContextMenu({ x: e.clientX, y: e.clientY, kind: 'folder', coll, collPath });
+          }}
+          onDragOver={(e) => {
+            if (!draggingReq || draggingReq.fromCollection === collPath) return;
+            e.preventDefault();
+            e.stopPropagation();
+            e.dataTransfer.dropEffect = 'move';
+            if (dragOverFolder !== collPath) {
+              setDragOverFolder(collPath);
+            }
+          }}
+          onDragLeave={(e) => {
+            if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+            if (dragOverFolder === collPath) {
+              setDragOverFolder(null);
+            }
+          }}
+          onDrop={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setDragOverFolder(null);
+            const activeDrag = draggingReq;
+            setDraggingReq(null);
+            if (activeDrag && activeDrag.fromCollection !== collPath) {
+              setCollapsedCollections((prev) => ({ ...prev, [collPath]: false }));
+              onMoveRequest(activeDrag.req, collPath);
+            }
+          }}
+          title={`${collPath} (${totalRequests} requests) — Right-click for Paste / Actions, or drop a request here to move`}
           className={`group flex items-center justify-between gap-1.5 rounded-xl border px-2.5 py-2 cursor-pointer text-[13px] font-bold transition select-none ${
-            isDark
-              ? 'border-transparent text-neutral-200 hover:border-neutral-700/80 hover:bg-neutral-800/85 hover:text-white'
-              : 'border-transparent text-slate-800 hover:border-slate-300 hover:bg-slate-200/85 hover:text-slate-950'
+            isDropTarget
+              ? 'border-violet-500 bg-violet-500/15 text-violet-300 ring-1 ring-violet-500/40'
+              : isDark
+                ? 'border-transparent text-neutral-200 hover:border-neutral-700/80 hover:bg-neutral-800/85 hover:text-white'
+                : 'border-transparent text-slate-800 hover:border-slate-300 hover:bg-slate-200/85 hover:text-slate-950'
           }`}
         >
           <div className="flex items-center gap-2 flex-1 min-w-0">
@@ -401,13 +463,32 @@ export const Sidebar: React.FC<Props> = ({
 
             {coll.requests.map((req) => {
               const isActive = activeRequestId === req.id;
+              const isBeingDragged = draggingReq?.req.id === req.id;
               const methodStyle = METHOD_STYLES[req.method] || METHOD_STYLES.GET;
 
               return (
                 <div
                   key={req.id}
+                  draggable={editingReqId !== req.id}
+                  onDragStart={(e) => {
+                    setContextMenu(null);
+                    setDraggingReq({ req, fromCollection: collPath });
+                    e.dataTransfer.effectAllowed = 'move';
+                    e.dataTransfer.setData('text/plain', req.id);
+                  }}
+                  onDragEnd={() => {
+                    setDraggingReq(null);
+                    setDragOverFolder(null);
+                  }}
                   onClick={() => onSelectRequest(req)}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setContextMenu({ x: e.clientX, y: e.clientY, kind: 'request', req, collPath });
+                  }}
                   className={`group relative flex items-center justify-between rounded-xl px-2.5 py-1.5 cursor-pointer text-xs transition border ${
+                    isBeingDragged ? 'opacity-45' : ''
+                  } ${
                     isActive
                       ? isDark
                         ? 'border-violet-500/40 bg-violet-950/20 text-white font-bold shadow-xs'
@@ -701,6 +782,170 @@ export const Sidebar: React.FC<Props> = ({
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Right-Click Context Menu for Requests (Copy / Rename / Delete) and Folders (Paste / New / Delete) */}
+      {contextMenu && (
+        <div
+          style={{
+            left: Math.min(contextMenu.x, Math.max(8, window.innerWidth - 220)),
+            top: Math.min(contextMenu.y, Math.max(8, window.innerHeight - 220)),
+          }}
+          onClick={(e) => e.stopPropagation()}
+          className={`fixed z-50 w-52 rounded-xl border p-1.5 shadow-2xl text-xs font-medium backdrop-blur-md ${
+            isDark
+              ? 'border-neutral-700/80 bg-[#171a26]/95 text-neutral-200'
+              : 'border-slate-300 bg-white/95 text-slate-800'
+          }`}
+        >
+          {contextMenu.kind === 'request' ? (
+            <>
+              <button
+                type="button"
+                onClick={() => {
+                  setCopiedRequest(contextMenu.req);
+                  setContextMenu(null);
+                }}
+                className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition ${
+                  isDark ? 'hover:bg-neutral-800 hover:text-white' : 'hover:bg-slate-100'
+                }`}
+              >
+                <Copy className="h-3.5 w-3.5 text-indigo-400 shrink-0" />
+                <span>Copy Request</span>
+              </button>
+              <button
+                type="button"
+                disabled={!copiedRequest}
+                onClick={() => {
+                  if (copiedRequest) {
+                    onPasteRequest(copiedRequest, contextMenu.collPath);
+                  }
+                  setContextMenu(null);
+                }}
+                className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition disabled:opacity-40 disabled:cursor-not-allowed ${
+                  isDark ? 'hover:bg-neutral-800 hover:text-white' : 'hover:bg-slate-100'
+                }`}
+              >
+                <ClipboardPaste className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
+                <span className="truncate">
+                  {copiedRequest ? `Paste "${copiedRequest.name}" Here` : 'Paste Request'}
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setEditingReqId(contextMenu.req.id);
+                  setEditingReqName(contextMenu.req.name || '');
+                  setContextMenu(null);
+                }}
+                className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition ${
+                  isDark ? 'hover:bg-neutral-800 hover:text-white' : 'hover:bg-slate-100'
+                }`}
+              >
+                <Pencil className="h-3.5 w-3.5 text-violet-400 shrink-0" />
+                <span>Rename Request</span>
+              </button>
+              <div className={`my-1 border-t ${isDark ? 'border-neutral-800' : 'border-slate-200'}`} />
+              <button
+                type="button"
+                onClick={() => {
+                  const { req, collPath } = contextMenu;
+                  setContextMenu(null);
+                  onDeleteRequest(req.id, collPath);
+                }}
+                className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-rose-400 transition ${
+                  isDark ? 'hover:bg-rose-500/15 hover:text-rose-300' : 'hover:bg-rose-50 hover:text-rose-600'
+                }`}
+              >
+                <Trash2 className="h-3.5 w-3.5 shrink-0" />
+                <span>Delete Request</span>
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                disabled={!copiedRequest}
+                onClick={() => {
+                  if (copiedRequest) {
+                    setCollapsedCollections((prev) => ({ ...prev, [contextMenu.collPath]: false }));
+                    onPasteRequest(copiedRequest, contextMenu.collPath);
+                  }
+                  setContextMenu(null);
+                }}
+                className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition disabled:opacity-40 disabled:cursor-not-allowed ${
+                  isDark ? 'hover:bg-neutral-800 hover:text-white' : 'hover:bg-slate-100'
+                }`}
+              >
+                <ClipboardPaste className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
+                <span className="truncate">
+                  {copiedRequest ? `Paste "${copiedRequest.name}"` : 'Paste Request (Empty)'}
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const target = contextMenu.collPath;
+                  setContextMenu(null);
+                  setCollapsedCollections((prev) => ({ ...prev, [target]: false }));
+                  onNewRequest(target);
+                }}
+                className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition ${
+                  isDark ? 'hover:bg-neutral-800 hover:text-white' : 'hover:bg-slate-100'
+                }`}
+              >
+                <Plus className="h-3.5 w-3.5 text-violet-400 shrink-0" />
+                <span>New Request</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const target = contextMenu.collPath;
+                  setContextMenu(null);
+                  setCollapsedCollections((prev) => ({ ...prev, [target]: false }));
+                  setCreatingSubfolderFor(target);
+                  setNewSubfolderName('');
+                }}
+                className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition ${
+                  isDark ? 'hover:bg-neutral-800 hover:text-white' : 'hover:bg-slate-100'
+                }`}
+              >
+                <FolderPlus className="h-3.5 w-3.5 text-amber-400 shrink-0" />
+                <span>New Subfolder</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const { coll, collPath } = contextMenu;
+                  setContextMenu(null);
+                  setEditingCollId(collPath);
+                  setEditingCollName(coll.name);
+                }}
+                className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition ${
+                  isDark ? 'hover:bg-neutral-800 hover:text-white' : 'hover:bg-slate-100'
+                }`}
+              >
+                <Pencil className="h-3.5 w-3.5 text-neutral-400 shrink-0" />
+                <span>Rename Folder</span>
+              </button>
+              <div className={`my-1 border-t ${isDark ? 'border-neutral-800' : 'border-slate-200'}`} />
+              <button
+                type="button"
+                onClick={() => {
+                  const target = contextMenu.coll;
+                  setContextMenu(null);
+                  setCollToDelete(target);
+                }}
+                className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-rose-400 transition ${
+                  isDark ? 'hover:bg-rose-500/15 hover:text-rose-300' : 'hover:bg-rose-50 hover:text-rose-600'
+                }`}
+              >
+                <Trash2 className="h-3.5 w-3.5 shrink-0" />
+                <span>Delete Folder</span>
+              </button>
+            </>
+          )}
         </div>
       )}
     </aside>

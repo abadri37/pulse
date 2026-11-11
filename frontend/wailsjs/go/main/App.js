@@ -74,6 +74,10 @@ export function LoadWorkspace() {
   return window['go']['main']['App']['LoadWorkspace']();
 }
 
+export function MoveRequest(arg1, arg2, arg3) {
+  return window['go']['main']['App']['MoveRequest'](arg1, arg2, arg3);
+}
+
 export function OpenInBrowser(arg1) {
   return window['go']['main']['App']['OpenInBrowser'](arg1);
 }

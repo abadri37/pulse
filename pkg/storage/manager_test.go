@@ -171,3 +171,43 @@ func TestSaveOrUpdateByNameAndDir_SameDirUpdatesDifferentDirPreserved(t *testing
 		t.Fatalf("expected Document same-named request preserved separately, got %+v", byFolder["Document"].Requests)
 	}
 }
+
+func TestMoveRequest_PreservesPayloadAcrossDirectories(t *testing.T) {
+	baseDir := t.TempDir()
+	mgr := &Manager{basePath: baseDir}
+
+	req := SavedRequest{
+		ID:         "req_move_1",
+		Name:       "Get Workspaces",
+		Collection: "Atom/Alpha",
+		Method:     "GET",
+		URL:        "https://api.example.com/workspaces",
+	}
+	if err := mgr.SaveRequest(req); err != nil {
+		t.Fatalf("SaveRequest failed: %v", err)
+	}
+	if err := mgr.CreateCollection("Atom/Beta"); err != nil {
+		t.Fatalf("CreateCollection failed: %v", err)
+	}
+
+	moved, err := mgr.MoveRequest("req_move_1", "Atom/Alpha", "Atom/Beta")
+	if err != nil {
+		t.Fatalf("MoveRequest failed: %v", err)
+	}
+	if moved.Collection != "Atom/Beta" {
+		t.Fatalf("expected moved Collection Atom/Beta, got %q", moved.Collection)
+	}
+
+	colls, err := mgr.LoadCollections()
+	if err != nil || len(colls) != 1 || len(colls[0].Folders) != 2 {
+		t.Fatalf("expected Atom with Alpha and Beta, got %+v (err=%v)", colls, err)
+	}
+	for _, f := range colls[0].Folders {
+		if f.Name == "Alpha" && len(f.Requests) != 0 {
+			t.Fatalf("expected Alpha empty after move, got %+v", f.Requests)
+		}
+		if f.Name == "Beta" && (len(f.Requests) != 1 || f.Requests[0].ID != "req_move_1") {
+			t.Fatalf("expected req_move_1 in Beta after move, got %+v", f.Requests)
+		}
+	}
+}

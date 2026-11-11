@@ -130,6 +130,14 @@ func (a *App) DeleteRequest(id string, collection string) error {
 	return a.storage.DeleteRequest(id, collection)
 }
 
+// MoveRequest moves a request file from one collection/folder directory to another on disk
+func (a *App) MoveRequest(id string, fromCollection string, toCollection string) (storage.SavedRequest, error) {
+	if a.storage == nil {
+		return storage.SavedRequest{}, fmt.Errorf("storage engine not initialized")
+	}
+	return a.storage.MoveRequest(id, fromCollection, toCollection)
+}
+
 // CreateCollection creates a new empty collection folder on disk
 func (a *App) CreateCollection(name string) error {
 	if a.storage == nil {
