@@ -227,6 +227,46 @@ func (m *Manager) SaveRequest(req SavedRequest) error {
 	return os.WriteFile(filePath, bytes, 0644)
 }
 
+// SaveOrUpdateByNameAndDir saves req inside its collection directory. If a request
+// with the same name (case-insensitive) already exists in that exact same directory,
+// it updates that request in place instead of creating a duplicate. Same-named requests
+// in different directories are preserved as separate requests.
+func (m *Manager) SaveOrUpdateByNameAndDir(req SavedRequest) error {
+	relPath, collDir, err := m.resolveCollectionDir(req.Collection)
+	if err != nil {
+		relPath, collDir, err = m.resolveCollectionDir("General")
+		if err != nil {
+			return err
+		}
+	}
+	req.Collection = relPath
+
+	trimmedName := strings.TrimSpace(req.Name)
+	if trimmedName != "" {
+		if entries, readErr := os.ReadDir(collDir); readErr == nil {
+			for _, entry := range entries {
+				if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+					continue
+				}
+				data, err := os.ReadFile(filepath.Join(collDir, entry.Name()))
+				if err != nil {
+					continue
+				}
+				var existing SavedRequest
+				if err := json.Unmarshal(data, &existing); err != nil {
+					continue
+				}
+				if strings.EqualFold(strings.TrimSpace(existing.Name), trimmedName) {
+					req.ID = existing.ID
+					break
+				}
+			}
+		}
+	}
+
+	return m.SaveRequest(req)
+}
+
 // DeleteRequest deletes a request file from disk
 func (m *Manager) DeleteRequest(id string, collectionName string) error {
 	if strings.TrimSpace(collectionName) == "" {

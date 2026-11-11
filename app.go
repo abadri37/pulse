@@ -258,19 +258,41 @@ func writeExportJSON(exportData interface{}, fileName string) (string, error) {
 	return filePath, nil
 }
 
-func findCollectionNode(colls []storage.Collection, target string) (*storage.Collection, bool) {
+func findCollectionNodeByExactPath(colls []storage.Collection, target string) (*storage.Collection, bool) {
 	for _, c := range colls {
-		if c.Path == target || c.Name == target {
+		if c.Path == target {
 			coll := c
 			return &coll, true
 		}
 		if len(c.Folders) > 0 {
-			if found, ok := findCollectionNode(c.Folders, target); ok {
+			if found, ok := findCollectionNodeByExactPath(c.Folders, target); ok {
 				return found, true
 			}
 		}
 	}
 	return nil, false
+}
+
+func findCollectionNodeByName(colls []storage.Collection, target string) (*storage.Collection, bool) {
+	for _, c := range colls {
+		if c.Name == target {
+			coll := c
+			return &coll, true
+		}
+		if len(c.Folders) > 0 {
+			if found, ok := findCollectionNodeByName(c.Folders, target); ok {
+				return found, true
+			}
+		}
+	}
+	return nil, false
+}
+
+func findCollectionNode(colls []storage.Collection, target string) (*storage.Collection, bool) {
+	if found, ok := findCollectionNodeByExactPath(colls, target); ok {
+		return found, true
+	}
+	return findCollectionNodeByName(colls, target)
 }
 
 func (a *App) findCollectionByName(collectionName string) (*storage.Collection, error) {
@@ -446,7 +468,7 @@ func (a *App) ImportCollectionIntoFolder(jsonContent string, parentFolder string
 	count := 0
 	for _, req := range res.Requests {
 		req.Collection = remapPath(req.Collection)
-		if err := a.storage.SaveRequest(req); err == nil {
+		if err := a.storage.SaveOrUpdateByNameAndDir(req); err == nil {
 			count++
 		}
 	}
@@ -471,7 +493,7 @@ func (a *App) ImportCSV(collectionName string, csvContent string) (int, error) {
 
 	count := 0
 	for _, req := range requests {
-		if err := a.storage.SaveRequest(req); err == nil {
+		if err := a.storage.SaveOrUpdateByNameAndDir(req); err == nil {
 			count++
 		}
 	}
@@ -503,7 +525,7 @@ func (a *App) ImportCurlCommand(collectionName string, curlCmd string) (storage.
 		return storage.SavedRequest{}, err
 	}
 
-	if err := a.storage.SaveRequest(req); err != nil {
+	if err := a.storage.SaveOrUpdateByNameAndDir(req); err != nil {
 		return storage.SavedRequest{}, err
 	}
 

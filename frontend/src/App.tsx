@@ -102,14 +102,30 @@ const flattenFolderPaths = (colls: CollectionItem[]): string[] => {
 };
 
 const findCollectionInTree = (colls: CollectionItem[], target: string): CollectionItem | undefined => {
-  for (const c of colls) {
-    if ((c.path || c.name) === target || c.name === target) return c;
-    if (c.folders?.length) {
-      const hit = findCollectionInTree(c.folders, target);
-      if (hit) return hit;
+  const findExact = (nodes: CollectionItem[]): CollectionItem | undefined => {
+    for (const c of nodes) {
+      if ((c.path || c.name) === target) return c;
+      if (c.folders?.length) {
+        const hit = findExact(c.folders);
+        if (hit) return hit;
+      }
     }
-  }
-  return undefined;
+    return undefined;
+  };
+  const exact = findExact(colls);
+  if (exact) return exact;
+
+  const findByName = (nodes: CollectionItem[]): CollectionItem | undefined => {
+    for (const c of nodes) {
+      if (c.name === target) return c;
+      if (c.folders?.length) {
+        const hit = findByName(c.folders);
+        if (hit) return hit;
+      }
+    }
+    return undefined;
+  };
+  return findByName(colls);
 };
 
 const mapCollectionsTree = (

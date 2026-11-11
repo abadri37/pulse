@@ -113,3 +113,61 @@ func TestNestedFoldersLoadAndRename(t *testing.T) {
 		t.Fatalf("expected updated grandchild path, got %+v", renamedAuth.Folders[0])
 	}
 }
+
+func TestSaveOrUpdateByNameAndDir_SameDirUpdatesDifferentDirPreserved(t *testing.T) {
+	baseDir := t.TempDir()
+	mgr := &Manager{basePath: baseDir}
+
+	reqContract := SavedRequest{
+		ID:         "req_contract_1",
+		Name:       "Get By Id",
+		Collection: "Kinto Global API/Contract",
+		Method:     "GET",
+		URL:        "http://localhost/contracts/1",
+	}
+	reqDocument := SavedRequest{
+		ID:         "req_document_1",
+		Name:       "Get By Id",
+		Collection: "Kinto Global API/Document",
+		Method:     "GET",
+		URL:        "http://localhost/documents/1",
+	}
+
+	if err := mgr.SaveOrUpdateByNameAndDir(reqContract); err != nil {
+		t.Fatalf("SaveOrUpdate Contract failed: %v", err)
+	}
+	if err := mgr.SaveOrUpdateByNameAndDir(reqDocument); err != nil {
+		t.Fatalf("SaveOrUpdate Document failed: %v", err)
+	}
+
+	// Re-importing same name in the SAME directory should update in place (no duplicate)
+	reqContractUpdated := SavedRequest{
+		ID:         "req_contract_new_id",
+		Name:       "get by id",
+		Collection: "Kinto Global API/Contract",
+		Method:     "POST",
+		URL:        "http://localhost/contracts/v2/1",
+	}
+	if err := mgr.SaveOrUpdateByNameAndDir(reqContractUpdated); err != nil {
+		t.Fatalf("SaveOrUpdate Contract update failed: %v", err)
+	}
+
+	colls, err := mgr.LoadCollections()
+	if err != nil || len(colls) != 1 {
+		t.Fatalf("expected 1 root collection, got %+v (err=%v)", colls, err)
+	}
+
+	byFolder := map[string]Collection{}
+	for _, sub := range colls[0].Folders {
+		byFolder[sub.Name] = sub
+	}
+	if len(byFolder["Contract"].Requests) != 1 {
+		t.Fatalf("expected 1 request in Contract (updated, not duplicated), got %d", len(byFolder["Contract"].Requests))
+	}
+	if byFolder["Contract"].Requests[0].ID != "req_contract_1" || byFolder["Contract"].Requests[0].URL != "http://localhost/contracts/v2/1" {
+		t.Fatalf("expected Contract request updated in place, got %+v", byFolder["Contract"].Requests[0])
+	}
+	if len(byFolder["Document"].Requests) != 1 || byFolder["Document"].Requests[0].URL != "http://localhost/documents/1" {
+		t.Fatalf("expected Document same-named request preserved separately, got %+v", byFolder["Document"].Requests)
+	}
+}
