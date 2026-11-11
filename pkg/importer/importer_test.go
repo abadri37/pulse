@@ -251,3 +251,34 @@ func TestParseCollectionWithFolders_PreservesExactHierarchy(t *testing.T) {
 		t.Fatalf("expected Health Check in 'Enterprise Suite', got %q", byName["Health Check"])
 	}
 }
+
+func TestOpenAPIAndCollection_FourLevelNestedFolders(t *testing.T) {
+	oa3 := `{
+  "openapi": "3.0.3",
+  "info": { "title": "DeepAPI" },
+  "paths": {
+    "/items": {
+      "get": {
+        "summary": "List Items",
+        "tags": ["1/2/3/4"]
+      }
+    }
+  }
+}`
+	res, err := ParseCollectionWithFolders(oa3)
+	if err != nil {
+		t.Fatalf("ParseCollectionWithFolders failed: %v", err)
+	}
+	if len(res.Requests) != 1 || res.Requests[0].Collection != "DeepAPI/1/2/3/4" {
+		t.Fatalf("expected Collection 'DeepAPI/1/2/3/4', got %+v", res.Requests)
+	}
+	want := []string{"DeepAPI", "DeepAPI/1", "DeepAPI/1/2", "DeepAPI/1/2/3", "DeepAPI/1/2/3/4"}
+	if len(res.Folders) != len(want) {
+		t.Fatalf("expected %v folders, got %v", want, res.Folders)
+	}
+	for i, w := range want {
+		if res.Folders[i] != w {
+			t.Fatalf("folder[%d]: expected %q, got %q", i, w, res.Folders[i])
+		}
+	}
+}

@@ -242,14 +242,7 @@ func parseOpenAPIv3Map(root map[string]interface{}) (ImportResult, error) {
 				reqName = fmt.Sprintf("%s %s", method, cleanPath)
 			}
 
-			targetCollection := collName
-			if tags := sliceVal(op["tags"]); len(tags) > 0 {
-				firstTag := strings.TrimSpace(strVal(tags[0]))
-				if firstTag != "" {
-					targetCollection = collName + "/" + sanitizeFolderSegment(firstTag)
-					appendUniqueFolder(&folders, seenFolders, targetCollection)
-				}
-			}
+			targetCollection := resolveOpenAPITagFolder(collName, op, &folders, seenFolders)
 
 			requests = append(requests, storage.SavedRequest{
 				ID:             fmt.Sprintf("req_oa3_%d_%d", time.Now().UnixNano(), idx),
@@ -393,14 +386,7 @@ func parseOpenAPIv2Map(root map[string]interface{}) (ImportResult, error) {
 				reqName = fmt.Sprintf("%s %s", method, opPath)
 			}
 
-			targetCollection := collName
-			if tags := sliceVal(op["tags"]); len(tags) > 0 {
-				firstTag := strings.TrimSpace(strVal(tags[0]))
-				if firstTag != "" {
-					targetCollection = collName + "/" + sanitizeFolderSegment(firstTag)
-					appendUniqueFolder(&folders, seenFolders, targetCollection)
-				}
-			}
+			targetCollection := resolveOpenAPITagFolder(collName, op, &folders, seenFolders)
 
 			fullURL := fmt.Sprintf("%s://%s%s%s", scheme, host, basePath, opPath)
 			requests = append(requests, storage.SavedRequest{
@@ -422,6 +408,33 @@ func parseOpenAPIv2Map(root map[string]interface{}) (ImportResult, error) {
 		Folders:        folders,
 		Requests:       requests,
 	}, nil
+}
+
+func resolveOpenAPITagFolder(
+	collName string,
+	op map[string]interface{},
+	folders *[]string,
+	seenFolders map[string]bool,
+) string {
+	tags := sliceVal(op["tags"])
+	if len(tags) == 0 {
+		return collName
+	}
+	firstTag := strings.TrimSpace(strVal(tags[0]))
+	if firstTag == "" {
+		return collName
+	}
+
+	curPath := collName
+	for _, rawSeg := range strings.Split(strings.ReplaceAll(firstTag, "\\", "/"), "/") {
+		trimmed := strings.TrimSpace(rawSeg)
+		if trimmed == "" {
+			continue
+		}
+		curPath = curPath + "/" + sanitizeFolderSegment(trimmed)
+		appendUniqueFolder(folders, seenFolders, curPath)
+	}
+	return curPath
 }
 
 func extractOpenAPIv3ServerURL(root map[string]interface{}) string {

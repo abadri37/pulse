@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { CollectionItem, RequestItem, HttpMethod } from '../types';
 import { useTheme } from '../context/ThemeContext';
 import {
@@ -89,6 +89,8 @@ export const Sidebar: React.FC<Props> = ({
   onOpenImport,
 }) => {
   const { isDark, accentDef } = useTheme();
+  const [sidebarWidth, setSidebarWidth] = useState<number>(380);
+  const isResizingRef = useRef(false);
   const [collapsedCollections, setCollapsedCollections] = useState<Record<string, boolean>>({});
   const [isCreatingColl, setIsCreatingColl] = useState(false);
   const [newCollName, setNewCollName] = useState('');
@@ -100,6 +102,27 @@ export const Sidebar: React.FC<Props> = ({
   const [editingCollName, setEditingCollName] = useState('');
   const [editingReqId, setEditingReqId] = useState<string | null>(null);
   const [editingReqName, setEditingReqName] = useState('');
+
+  useEffect(() => {
+    const onMouseMove = (e: MouseEvent) => {
+      if (!isResizingRef.current) return;
+      // Offset 52px accounts for IconRail width
+      const nextWidth = Math.max(300, Math.min(600, e.clientX - 52));
+      setSidebarWidth(nextWidth);
+    };
+    const onMouseUp = () => {
+      if (isResizingRef.current) {
+        isResizingRef.current = false;
+        document.body.style.cursor = '';
+      }
+    };
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    };
+  }, []);
 
   const toggleCollapse = (collKey: string) => {
     setCollapsedCollections((prev) => ({
@@ -174,20 +197,20 @@ export const Sidebar: React.FC<Props> = ({
             }
           }}
           title={`${collPath} (${totalRequests} requests)`}
-          className={`group flex items-center justify-between gap-1.5 rounded-xl border px-2 py-1.5 cursor-pointer text-xs font-bold transition select-none ${
+          className={`group flex items-center justify-between gap-1.5 rounded-xl border px-2.5 py-2 cursor-pointer text-[13px] font-bold transition select-none ${
             isDark
               ? 'border-transparent text-neutral-200 hover:border-neutral-700/80 hover:bg-neutral-800/85 hover:text-white'
               : 'border-transparent text-slate-800 hover:border-slate-300 hover:bg-slate-200/85 hover:text-slate-950'
           }`}
         >
-          <div className="flex items-center gap-1.5 flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-1 min-w-0">
             {isCollapsed ? (
-              <ChevronRight className="h-3.5 w-3.5 text-neutral-500 shrink-0" />
+              <ChevronRight className="h-4 w-4 text-neutral-400 shrink-0" />
             ) : (
-              <ChevronDown className="h-3.5 w-3.5 text-neutral-500 shrink-0" />
+              <ChevronDown className="h-4 w-4 text-neutral-400 shrink-0" />
             )}
             {isCollapsed ? (
-              <Folder className={`h-4 w-4 shrink-0 ${depth === 0 ? 'text-amber-500/80' : 'text-indigo-400/85'}`} />
+              <Folder className={`h-4 w-4 shrink-0 ${depth === 0 ? 'text-amber-500/85' : 'text-indigo-400/90'}`} />
             ) : (
               <FolderOpen className={`h-4 w-4 shrink-0 ${depth === 0 ? 'text-amber-400' : 'text-indigo-400'}`} />
             )}
@@ -238,8 +261,8 @@ export const Sidebar: React.FC<Props> = ({
             </span>
           </div>
 
-          {/* Folder Actions: Rename, Add Subfolder, OA2, JSON, Add Request, Delete */}
-          <div className="flex items-center gap-0.5 opacity-80 group-hover:opacity-100 transition shrink-0">
+          {/* Folder Actions: reveal cleanly on hover so deep nested names never squeeze */}
+          <div className="hidden group-hover:flex items-center gap-0.5 shrink-0">
             <button
               onClick={(e) => {
                 e.stopPropagation();
@@ -330,8 +353,10 @@ export const Sidebar: React.FC<Props> = ({
 
         {/* Child Subfolders & Requests */}
         {!isCollapsed && (
-          <div className={`ml-3.5 pl-2 border-l flex flex-col gap-1 mt-1 ${
-            isDark ? 'border-neutral-800/80' : 'border-slate-200'
+          <div className={`ml-4 pl-3 border-l-2 flex flex-col gap-1 mt-1 ${
+            isDark
+              ? depth % 2 === 0 ? 'border-neutral-700/80' : 'border-indigo-500/30'
+              : depth % 2 === 0 ? 'border-slate-300' : 'border-indigo-300/80'
           }`}>
             {creatingSubfolderFor === collPath && (
               <form
@@ -442,7 +467,7 @@ export const Sidebar: React.FC<Props> = ({
                     )}
                   </div>
 
-                  <div className="flex items-center gap-0.5 opacity-70 group-hover:opacity-100 transition shrink-0">
+                  <div className="hidden group-hover:flex items-center gap-0.5 shrink-0">
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
@@ -491,9 +516,22 @@ export const Sidebar: React.FC<Props> = ({
   };
 
   return (
-    <aside className={`flex w-80 shrink-0 flex-col border-r select-none transition-colors duration-200 ${
-      isDark ? 'border-neutral-800/80 bg-[#11131a]' : 'border-slate-200 bg-slate-50/90'
-    }`}>
+    <aside
+      style={{ width: `${sidebarWidth}px` }}
+      className={`relative flex shrink-0 flex-col border-r select-none transition-colors duration-200 ${
+        isDark ? 'border-neutral-800/80 bg-[#11131a]' : 'border-slate-200 bg-slate-50/90'
+      }`}
+    >
+      {/* Draggable right-edge width resizer */}
+      <div
+        onMouseDown={(e) => {
+          e.preventDefault();
+          isResizingRef.current = true;
+          document.body.style.cursor = 'col-resize';
+        }}
+        title="Drag to resize sidebar width"
+        className="absolute right-0 top-0 bottom-0 w-1.5 z-20 cursor-col-resize hover:bg-violet-500/40 transition-colors"
+      />
       {/* 1. Explorer Header */}
       <div className={`flex items-center justify-between border-b px-3.5 py-3 ${
         isDark ? 'border-neutral-800/80' : 'border-slate-200'

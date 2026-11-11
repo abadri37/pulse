@@ -822,7 +822,7 @@ function Workspace() {
           {layoutMode === 'side' ? (
             <div className="flex flex-1 overflow-hidden min-h-0 min-w-0">
               {/* Request Composer (Left/Center Pane) */}
-              <div className={`w-1/2 min-w-0 min-h-0 flex flex-col overflow-hidden border-r ${isDark ? 'border-neutral-800/80' : 'border-slate-200'}`}>
+              <div className={`flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden border-r ${isDark ? 'border-neutral-800/80' : 'border-slate-200'}`}>
                 <RequestComposer
                   request={activeRequest}
                   onChange={handleActiveRequestChange}
@@ -835,8 +835,8 @@ function Workspace() {
                 />
               </div>
 
-              {/* Response Viewer (Right Pane) */}
-              <div className="w-1/2 min-w-0 min-h-0 flex flex-col overflow-hidden">
+              {/* Response Viewer (Right Pane - compact width to give Sidebar & Composer more space) */}
+              <div className="w-[38%] min-w-[300px] min-h-0 flex flex-col overflow-hidden">
                 <ResponseViewer response={response} isLoading={isLoading} />
               </div>
             </div>
