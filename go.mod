@@ -5,6 +5,7 @@ go 1.26.0
 require (
 	github.com/dop251/goja v0.0.0-20261108153707-d8dfb4d8b999
 	github.com/wailsapp/wails/v2 v2.17.1
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (

@@ -66,141 +66,16 @@ type CollectionURLSpec struct {
 	} `json:"query"`
 }
 
-type swagger2Doc struct {
-	Swagger  string   `json:"swagger"`
-	Host     string   `json:"host"`
-	BasePath string   `json:"basePath"`
-	Schemes  []string `json:"schemes"`
-	Info     struct {
-		Title string `json:"title"`
-	} `json:"info"`
-	Paths map[string]map[string]struct {
-		Summary    string   `json:"summary"`
-		Consumes   []string `json:"consumes"`
-		Parameters []struct {
-			Name    string                 `json:"name"`
-			In      string                 `json:"in"`
-			Default interface{}            `json:"default"`
-			Schema  map[string]interface{} `json:"schema"`
-		} `json:"parameters"`
-	} `json:"paths"`
-}
-
-func parseOpenAPIv2(content string) (string, []storage.SavedRequest, error) {
-	var doc swagger2Doc
-	if err := json.Unmarshal([]byte(content), &doc); err != nil {
-		return "", nil, fmt.Errorf("invalid OpenAPI v2 JSON: %w", err)
-	}
-	collName := strings.TrimSpace(doc.Info.Title)
-	if collName == "" {
-		collName = "Imported OpenAPI v2"
-	}
-	scheme := "http"
-	if len(doc.Schemes) > 0 && doc.Schemes[0] != "" {
-		scheme = doc.Schemes[0]
-	}
-	host := strings.TrimSpace(doc.Host)
-	if host == "" {
-		host = "localhost"
-	}
-	basePath := strings.TrimRight(doc.BasePath, "/")
-
-	var requests []storage.SavedRequest
-	idx := 0
-	for p, methods := range doc.Paths {
-		cleanPath := strings.SplitN(p, "?", 2)[0]
-		if !strings.HasPrefix(cleanPath, "/") {
-			cleanPath = "/" + cleanPath
-		}
-		fullURL := fmt.Sprintf("%s://%s%s%s", scheme, host, basePath, cleanPath)
-
-		for m, op := range methods {
-			idx++
-			method := strings.ToUpper(m)
-			var headers []engine.HeaderPair
-			var queryParams []engine.ParamPair
-			var formParts []string
-			body := engine.RequestBody{Type: "none", Raw: ""}
-
-			for _, c := range op.Consumes {
-				if c != "" {
-					headers = append(headers, engine.HeaderPair{Key: "Content-Type", Value: c, Enabled: true})
-					break
-				}
-			}
-
-			for _, param := range op.Parameters {
-				defStr := ""
-				if param.Default != nil {
-					defStr = fmt.Sprintf("%v", param.Default)
-				}
-				switch strings.ToLower(param.In) {
-				case "query":
-					queryParams = append(queryParams, engine.ParamPair{Key: param.Name, Value: defStr, Enabled: true})
-				case "header":
-					headers = append(headers, engine.HeaderPair{Key: param.Name, Value: defStr, Enabled: true})
-				case "formdata":
-					formParts = append(formParts, fmt.Sprintf("%s=%s", param.Name, defStr))
-				case "body":
-					bodyType := "json"
-					for _, c := range op.Consumes {
-						if strings.Contains(strings.ToLower(c), "xml") {
-							bodyType = "xml"
-							break
-						} else if strings.Contains(strings.ToLower(c), "text/plain") {
-							bodyType = "raw"
-							break
-						}
-					}
-					raw := ""
-					if ex, ok := param.Schema["example"]; ok {
-						if s, isStr := ex.(string); isStr {
-							raw = s
-						} else if b, err := json.MarshalIndent(ex, "", "  "); err == nil {
-							raw = string(b)
-						}
-					}
-					body = engine.RequestBody{Type: bodyType, Raw: raw}
-				}
-			}
-
-			if len(formParts) > 0 {
-				body = engine.RequestBody{Type: "x-www-form-urlencoded", Raw: strings.Join(formParts, "&")}
-			}
-
-			reqName := strings.TrimSpace(op.Summary)
-			if reqName == "" {
-				reqName = fmt.Sprintf("%s %s", method, cleanPath)
-			}
-
-			requests = append(requests, storage.SavedRequest{
-				ID:             fmt.Sprintf("req_oa2_%d_%d", time.Now().UnixNano(), idx),
-				Name:           reqName,
-				Collection:     collName,
-				Method:         method,
-				URL:            fullURL,
-				Headers:        headers,
-				QueryParams:    queryParams,
-				Body:           body,
-				LastModifiedAt: time.Now().Unix(),
-			})
-		}
-	}
-	return collName, requests, nil
-}
-
-// ParseCollectionJSON converts Collection v2.0 / v2.1 or OpenAPI v2 (Swagger 2.0) JSON into Pulse saved requests
+// ParseCollectionJSON automatically detects OpenAPI v3 (3.0/3.1), OpenAPI v2 (Swagger 2.0)
+// in JSON or YAML, or Collection v2.0/v2.1 JSON and converts them into Pulse saved requests.
 func ParseCollectionJSON(content string) (string, []storage.SavedRequest, error) {
-	var probe struct {
-		Swagger string `json:"swagger"`
-	}
-	if err := json.Unmarshal([]byte(content), &probe); err == nil && strings.HasPrefix(strings.TrimSpace(probe.Swagger), "2.") {
-		return parseOpenAPIv2(content)
+	if matched, collName, requests, err := parseOpenAPISpec(content); matched {
+		return collName, requests, err
 	}
 
 	var coll CollectionDocument
 	if err := json.Unmarshal([]byte(content), &coll); err != nil {
-		return "", nil, fmt.Errorf("invalid collection JSON: %w", err)
+		return "", nil, fmt.Errorf("invalid specification: expected Collection v2.0/v2.1 JSON or OpenAPI v2/v3 (JSON/YAML): %w", err)
 	}
 
 	collName := strings.TrimSpace(coll.Info.Name)

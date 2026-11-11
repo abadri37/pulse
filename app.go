@@ -374,7 +374,7 @@ func (a *App) DeleteEnvironment(id string) error {
 	return a.storage.DeleteEnvironment(id)
 }
 
-// ImportCollectionJSON parses and saves a Collection v2.0/v2.1 or OpenAPI v2 JSON collection to disk
+// ImportCollectionJSON auto-detects and imports Collection v2.0/v2.1 JSON, OpenAPI v2 (Swagger 2.0), or OpenAPI v3 (3.0/3.1 JSON/YAML) into disk storage
 func (a *App) ImportCollectionJSON(jsonContent string) (int, error) {
 	if a.storage == nil {
 		return 0, fmt.Errorf("storage engine not initialized")

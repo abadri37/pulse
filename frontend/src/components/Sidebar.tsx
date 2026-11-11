@@ -154,7 +154,7 @@ export const Sidebar: React.FC<Props> = ({
                 ? 'border-neutral-800 bg-neutral-900/90 text-neutral-300 hover:bg-neutral-800 hover:text-white'
                 : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-100'
             }`}
-            title="Import Collection / OpenAPI v2 / CSV / cURL"
+            title="Import Collection / OpenAPI v2 & v3 / CSV / cURL"
           >
             <Upload className="h-3 w-3 text-indigo-400" />
             <span>Import</span>

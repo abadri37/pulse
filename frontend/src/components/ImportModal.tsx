@@ -55,7 +55,7 @@ export const ImportModal: React.FC<Props> = ({ isOpen, onClose, onImportComplete
         const count = await ImportCollectionJSON(content);
         setStatusMessage({
           type: 'success',
-          text: `Imported & auto-saved ${count} requests from JSON / OpenAPI v2 spec!`,
+          text: `Imported & auto-saved ${count} requests from Collection / OpenAPI spec!`,
         });
       } else if (tab === 'csv') {
         const count = await ImportCSV(targetCollectionName, content);
@@ -124,7 +124,7 @@ export const ImportModal: React.FC<Props> = ({ isOpen, onClose, onImportComplete
                 : 'border-transparent hover:text-neutral-200'
             }`}
           >
-            Collection / OpenAPI v2 (.json)
+            Collection / OpenAPI v2 & v3
           </button>
 
           <button
@@ -166,11 +166,11 @@ export const ImportModal: React.FC<Props> = ({ isOpen, onClose, onImportComplete
           {tab === 'collection' && (
             <div className="flex flex-col gap-2">
               <span className="text-xs text-neutral-400">
-                Upload or paste a standard Collection v2.0 / v2.1 JSON or OpenAPI v2 (Swagger 2.0) JSON file. Pulse will import all folders and requests into your workspace.
+                Upload or paste a Collection (v2.0 / v2.1 JSON) or OpenAPI specification (v2 / v3.0 / v3.1 JSON or YAML). Pulse automatically detects the version and imports all endpoints.
               </span>
               <input
                 type="file"
-                accept=".json"
+                accept=".json,.yaml,.yml"
                 onChange={handleFileUpload}
                 className="block w-full text-xs text-neutral-400 file:mr-4 file:py-1.5 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-indigo-600 file:text-white hover:file:bg-indigo-500 cursor-pointer"
               />

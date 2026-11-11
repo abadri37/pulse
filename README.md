@@ -40,7 +40,7 @@ Pulse runs natively on your desktop with a pure Go networking backend (`net/http
 - **Collections, Tabs & Import / Export**
   - File-backed collections and environments stored under `~/.pulse/collections/` and `~/.pulse/environments/` with debounced auto-save.
   - Inline rename for collection folders and requests (pencil icon or double-click), delete confirmations, search filtering, multi-tab workspace (`Close`, `Close Others`, `Close All`, `Copy cURL`).
-  - **Import:** Collection JSON (v2.0 / v2.1), OpenAPI v2 (Swagger 2.0) JSON, CSV endpoint sheets, and raw `cURL` commands.
+  - **Import:** Collection JSON (v2.0 / v2.1), OpenAPI v2 (Swagger 2.0) & OpenAPI v3 (3.0 / 3.1 JSON/YAML) with automatic version detection, CSV endpoint sheets, and raw `cURL` commands.
   - **Export:** Collection JSON, OpenAPI v2 (Swagger 2.0) JSON, single request export, and Copy as `cURL`.
 - **Integrated Concurrent Load Tester**
   - Configure Virtual Users (concurrent workers), Duration, and Ramp-Up time.
@@ -82,7 +82,7 @@ pulse/
 ├── pkg/
 │   ├── engine/                   # net/http + httptrace client, cookie jar, URL/header resolvers
 │   ├── exporter/                 # OpenAPI v2 (Swagger 2.0) exporter
-│   ├── importer/                 # Collection JSON, OpenAPI v2, CSV, and cURL parsers
+│   ├── importer/                 # Collection JSON, OpenAPI v2/v3 (JSON/YAML), CSV, and cURL parsers
 │   ├── loadtest/                 # Concurrent worker runner, percentile metrics, HTML reporter
 │   ├── resolver/                 # {{var}} & dynamic token ($uuid, $timestamp, etc.) resolver
 │   ├── script/                   # Goja JS sandbox for pre-request & post-response scripts
@@ -227,7 +227,7 @@ Update the version consistently across `version.go`, `wails.json`, and `frontend
 go test -v ./...
 ```
 
-Covers HTTP variable resolution (`pkg/engine`), OpenAPI v2 export (`pkg/exporter`), load test throughput/header/query accuracy (`pkg/loadtest`), Goja scripting sandbox (`pkg/script`), and collection storage/rename (`pkg/storage`).
+Covers HTTP variable resolution (`pkg/engine`), OpenAPI v2/v3 & Collection import (`pkg/importer`), OpenAPI v2 export (`pkg/exporter`), load test throughput/header/query accuracy (`pkg/loadtest`), Goja scripting sandbox (`pkg/script`), and collection storage/rename (`pkg/storage`).
 
 ### Frontend Typecheck & Build
 
