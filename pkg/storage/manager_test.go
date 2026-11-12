@@ -211,3 +211,64 @@ func TestMoveRequest_PreservesPayloadAcrossDirectories(t *testing.T) {
 		}
 	}
 }
+
+func TestMoveAndReorderCollections(t *testing.T) {
+	baseDir := t.TempDir()
+	mgr := &Manager{basePath: baseDir}
+
+	for _, dir := range []string{"RootA/ChildOne", "RootA/ChildTwo", "RootA/ChildThree", "RootB"} {
+		if err := mgr.CreateCollection(dir); err != nil {
+			t.Fatalf("CreateCollection(%s) failed: %v", dir, err)
+		}
+	}
+	if err := mgr.SaveRequest(SavedRequest{
+		ID:         "req_nested_1",
+		Name:       "Ping",
+		Collection: "RootA/ChildOne",
+		Method:     "GET",
+		URL:        "https://example.com/ping",
+	}); err != nil {
+		t.Fatalf("SaveRequest failed: %v", err)
+	}
+
+	// Reorder root collections and child subfolders
+	if err := mgr.ReorderCollections("", []string{"RootB", "RootA"}); err != nil {
+		t.Fatalf("ReorderCollections root failed: %v", err)
+	}
+	if err := mgr.ReorderCollections("RootA", []string{"ChildThree", "ChildTwo", "ChildOne"}); err != nil {
+		t.Fatalf("ReorderCollections child failed: %v", err)
+	}
+
+	colls, err := mgr.LoadCollections()
+	if err != nil || len(colls) != 2 {
+		t.Fatalf("LoadCollections failed: %+v (err=%v)", colls, err)
+	}
+	if colls[0].Name != "RootB" || colls[1].Name != "RootA" {
+		t.Fatalf("expected root order [RootB RootA], got [%s %s]", colls[0].Name, colls[1].Name)
+	}
+	rootA := colls[1]
+	if len(rootA.Folders) != 3 ||
+		rootA.Folders[0].Name != "ChildThree" ||
+		rootA.Folders[1].Name != "ChildTwo" ||
+		rootA.Folders[2].Name != "ChildOne" {
+		t.Fatalf("unexpected child folder order: %+v", rootA.Folders)
+	}
+
+	// Self/descendant move must fail cleanly
+	if _, err := mgr.MoveCollection("RootA", "RootA/ChildOne"); err == nil {
+		t.Fatalf("expected moving folder into its own descendant to fail")
+	}
+
+	// Move RootA/ChildOne into RootB
+	newPath, err := mgr.MoveCollection("RootA/ChildOne", "RootB")
+	if err != nil || newPath != "RootB/ChildOne" {
+		t.Fatalf("MoveCollection failed: path=%q err=%v", newPath, err)
+	}
+	colls2, err := mgr.LoadCollections()
+	if err != nil || len(colls2[0].Folders) != 1 || colls2[0].Folders[0].Name != "ChildOne" {
+		t.Fatalf("expected ChildOne inside RootB, got %+v (err=%v)", colls2[0], err)
+	}
+	if len(colls2[0].Folders[0].Requests) != 1 || colls2[0].Folders[0].Requests[0].Collection != "RootB/ChildOne" {
+		t.Fatalf("expected nested request Collection updated to RootB/ChildOne, got %+v", colls2[0].Folders[0].Requests)
+	}
+}

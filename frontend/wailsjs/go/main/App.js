@@ -74,6 +74,10 @@ export function LoadWorkspace() {
   return window['go']['main']['App']['LoadWorkspace']();
 }
 
+export function MoveCollection(arg1, arg2) {
+  return window['go']['main']['App']['MoveCollection'](arg1, arg2);
+}
+
 export function MoveRequest(arg1, arg2, arg3) {
   return window['go']['main']['App']['MoveRequest'](arg1, arg2, arg3);
 }
@@ -88,6 +92,10 @@ export function ParseCurl(arg1) {
 
 export function RenameCollection(arg1, arg2) {
   return window['go']['main']['App']['RenameCollection'](arg1, arg2);
+}
+
+export function ReorderCollections(arg1, arg2) {
+  return window['go']['main']['App']['ReorderCollections'](arg1, arg2);
 }
 
 export function ResolveVariables(arg1, arg2) {

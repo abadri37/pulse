@@ -40,6 +40,8 @@ export function ImportCurlCommand(arg1:string,arg2:string):Promise<storage.Saved
 
 export function LoadWorkspace():Promise<storage.WorkspaceData>;
 
+export function MoveCollection(arg1:string,arg2:string):Promise<string>;
+
 export function MoveRequest(arg1:string,arg2:string,arg3:string):Promise<storage.SavedRequest>;
 
 export function OpenInBrowser(arg1:string):Promise<void>;
@@ -47,6 +49,8 @@ export function OpenInBrowser(arg1:string):Promise<void>;
 export function ParseCurl(arg1:string):Promise<storage.SavedRequest>;
 
 export function RenameCollection(arg1:string,arg2:string):Promise<void>;
+
+export function ReorderCollections(arg1:string,arg2:Array<string>):Promise<void>;
 
 export function ResolveVariables(arg1:string,arg2:Record<string, string>):Promise<string>;
 

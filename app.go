@@ -162,6 +162,22 @@ func (a *App) DeleteCollection(name string) error {
 	return a.storage.DeleteCollection(name)
 }
 
+// MoveCollection moves a directory (and its subfolders/requests) into targetParentPath or root
+func (a *App) MoveCollection(oldPath string, targetParentPath string) (string, error) {
+	if a.storage == nil {
+		return "", fmt.Errorf("storage engine not initialized")
+	}
+	return a.storage.MoveCollection(oldPath, targetParentPath)
+}
+
+// ReorderCollections persists custom directory display ordering under parentPath (or root when empty)
+func (a *App) ReorderCollections(parentPath string, orderedNames []string) error {
+	if a.storage == nil {
+		return nil
+	}
+	return a.storage.ReorderCollections(parentPath, orderedNames)
+}
+
 func buildExportRequestItem(r storage.SavedRequest) map[string]interface{} {
 	headers := make([]map[string]interface{}, 0, len(r.Headers))
 	for _, h := range r.Headers {

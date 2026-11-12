@@ -15,6 +15,8 @@ import {
   SaveRequest as apiSaveRequest,
   DeleteRequest as apiDeleteRequest,
   MoveRequest as apiMoveRequest,
+  MoveCollection as apiMoveCollection,
+  ReorderCollections as apiReorderCollections,
   CreateCollection as apiCreateCollection,
   RenameCollection as apiRenameCollection,
   DeleteCollection as apiDeleteCollection,
@@ -626,6 +628,44 @@ function Workspace() {
     }
   };
 
+  // Handle Move Directory into another Directory (or to root when targetParentPath === '')
+  const handleMoveCollection = async (oldPath: string, targetParentPath: string) => {
+    if (!oldPath) return;
+    const cleanTarget = targetParentPath.trim();
+    if (cleanTarget === oldPath || cleanTarget.startsWith(`${oldPath}/`)) {
+      return;
+    }
+
+    try {
+      const newPath = await apiMoveCollection(oldPath, cleanTarget);
+      if (newPath && newPath !== oldPath) {
+        const remapCollection = (col: string) => {
+          if (col === oldPath) return newPath;
+          if (col.startsWith(`${oldPath}/`)) return `${newPath}${col.slice(oldPath.length)}`;
+          return col;
+        };
+        setOpenTabs((prev) =>
+          prev.map((t) => ({ ...t, collection: remapCollection(t.collection) }))
+        );
+        setActiveRequest((prev) => ({ ...prev, collection: remapCollection(prev.collection) }));
+      }
+      await refreshWorkspace();
+    } catch (err) {
+      console.error('Failed to move collection:', err);
+      await refreshWorkspace();
+    }
+  };
+
+  // Handle Reorder Sibling Directories (Up / Down / Drag-Reorder)
+  const handleReorderCollections = async (parentPath: string, orderedNames: string[]) => {
+    try {
+      await apiReorderCollections(parentPath, orderedNames);
+      await refreshWorkspace();
+    } catch (err) {
+      console.error('Failed to reorder collections:', err);
+    }
+  };
+
   // Handle Delete Collection / Subfolder
   const handleDeleteCollection = async (targetPath: string) => {
     const matchesTarget = (col: string) =>
@@ -875,6 +915,8 @@ function Workspace() {
           onDeleteRequest={handleDeleteRequest}
           onPasteRequest={handlePasteRequest}
           onMoveRequest={handleMoveRequest}
+          onMoveCollection={handleMoveCollection}
+          onReorderCollections={handleReorderCollections}
           onOpenImport={() => {
             setImportInitialTab('collection');
             setIsImportModalOpen(true);

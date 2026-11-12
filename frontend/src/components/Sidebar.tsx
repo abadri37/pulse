@@ -18,6 +18,10 @@ import {
   Pencil,
   Copy,
   ClipboardPaste,
+  ArrowUp,
+  ArrowDown,
+  FolderUp,
+  ChevronsDownUp,
 } from 'lucide-react';
 
 interface Props {
@@ -35,6 +39,8 @@ interface Props {
   onDeleteRequest: (id: string, collectionName: string) => void;
   onPasteRequest: (req: RequestItem, targetCollection: string) => void;
   onMoveRequest: (req: RequestItem, targetCollection: string) => void;
+  onMoveCollection: (oldPath: string, targetParentPath: string) => void;
+  onReorderCollections: (parentPath: string, orderedNames: string[]) => void;
   onOpenImport: () => void;
 }
 
@@ -92,6 +98,8 @@ export const Sidebar: React.FC<Props> = ({
   onDeleteRequest,
   onPasteRequest,
   onMoveRequest,
+  onMoveCollection,
+  onReorderCollections,
   onOpenImport,
 }) => {
   const { isDark, accentDef } = useTheme();
@@ -111,9 +119,12 @@ export const Sidebar: React.FC<Props> = ({
   const [copiedRequest, setCopiedRequest] = useState<RequestItem | null>(null);
   const [draggingReq, setDraggingReq] = useState<{ req: RequestItem; fromCollection: string } | null>(null);
   const [dragOverFolder, setDragOverFolder] = useState<string | null>(null);
+  const [draggingFolder, setDraggingFolder] = useState<{ collPath: string; parentPath: string; name: string } | null>(null);
+  const [folderDropTarget, setFolderDropTarget] = useState<{ collPath: string; position: 'before' | 'inside' | 'after' } | null>(null);
+  const [rootDropActive, setRootDropActive] = useState(false);
   const [contextMenu, setContextMenu] = useState<
     | { x: number; y: number; kind: 'request'; req: RequestItem; collPath: string }
-    | { x: number; y: number; kind: 'folder'; coll: CollectionItem; collPath: string }
+    | { x: number; y: number; kind: 'folder'; coll: CollectionItem; collPath: string; parentPath: string }
     | null
   >(null);
 
@@ -157,6 +168,56 @@ export const Sidebar: React.FC<Props> = ({
       ...prev,
       [collKey]: !prev[collKey],
     }));
+  };
+
+  const collapseAllFolders = () => {
+    const next: Record<string, boolean> = {};
+    const walk = (nodes: CollectionItem[]) => {
+      for (const n of nodes) {
+        next[n.path || n.name] = true;
+        if (n.folders?.length) walk(n.folders);
+      }
+    };
+    walk(collections);
+    setCollapsedCollections(next);
+  };
+
+  const getSiblingInfo = (parentPath: string, folderName: string): { names: string[]; index: number } => {
+    let siblings: CollectionItem[] = collections;
+    if (parentPath) {
+      const findParent = (nodes: CollectionItem[]): CollectionItem | undefined => {
+        for (const n of nodes) {
+          if ((n.path || n.name) === parentPath) return n;
+          if (n.folders?.length) {
+            const hit = findParent(n.folders);
+            if (hit) return hit;
+          }
+        }
+        return undefined;
+      };
+      siblings = findParent(collections)?.folders || [];
+    }
+    const names = siblings.map((s) => s.name);
+    return { names, index: names.indexOf(folderName) };
+  };
+
+  const moveFolderSibling = (parentPath: string, folderName: string, delta: -1 | 1) => {
+    const { names, index } = getSiblingInfo(parentPath, folderName);
+    const targetIdx = index + delta;
+    if (index < 0 || targetIdx < 0 || targetIdx >= names.length) return;
+    const next = [...names];
+    [next[index], next[targetIdx]] = [next[targetIdx], next[index]];
+    onReorderCollections(parentPath, next);
+  };
+
+  const reorderFolderRelative = (parentPath: string, srcName: string, targetName: string, position: 'before' | 'after') => {
+    const { names } = getSiblingInfo(parentPath, srcName);
+    const withoutSrc = names.filter((n) => n !== srcName);
+    const targetIdx = withoutSrc.indexOf(targetName);
+    if (targetIdx < 0) return;
+    const insertIdx = position === 'before' ? targetIdx : targetIdx + 1;
+    withoutSrc.splice(insertIdx, 0, srcName);
+    onReorderCollections(parentPath, withoutSrc);
   };
 
   const countRequestsRecursive = (node: CollectionItem): number => {
@@ -209,17 +270,32 @@ export const Sidebar: React.FC<Props> = ({
       .filter((x): x is CollectionItem => x !== null);
   }, [collections, searchQuery]);
 
-  const renderCollectionNode = (coll: CollectionItem, depth = 0): React.ReactNode => {
+  const renderCollectionNode = (coll: CollectionItem, depth = 0, parentPath = ''): React.ReactNode => {
     const collPath = coll.path || coll.name;
     const isCollapsed = !searchQuery.trim() && !!collapsedCollections[collPath];
     const totalRequests = countRequestsRecursive(coll);
     const hasSubfolders = (coll.folders?.length || 0) > 0;
-    const isDropTarget = dragOverFolder === collPath && draggingReq?.fromCollection !== collPath;
+    const isReqDropTarget = dragOverFolder === collPath && draggingReq?.fromCollection !== collPath;
+    const isFolderDragged = draggingFolder?.collPath === collPath;
+    const folderDropPos = folderDropTarget?.collPath === collPath ? folderDropTarget.position : null;
 
     return (
       <div key={collPath} className="flex flex-col">
         {/* Collection / Folder Header Row */}
         <div
+          draggable={editingCollId !== collPath}
+          onDragStart={(e) => {
+            setContextMenu(null);
+            setDraggingReq(null);
+            setDraggingFolder({ collPath, parentPath, name: coll.name });
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', collPath);
+          }}
+          onDragEnd={() => {
+            setDraggingFolder(null);
+            setFolderDropTarget(null);
+            setRootDropActive(false);
+          }}
           onClick={() => {
             if (editingCollId !== collPath) {
               toggleCollapse(collPath);
@@ -228,15 +304,35 @@ export const Sidebar: React.FC<Props> = ({
           onContextMenu={(e) => {
             e.preventDefault();
             e.stopPropagation();
-            setContextMenu({ x: e.clientX, y: e.clientY, kind: 'folder', coll, collPath });
+            setContextMenu({ x: e.clientX, y: e.clientY, kind: 'folder', coll, collPath, parentPath });
           }}
           onDragOver={(e) => {
-            if (!draggingReq || draggingReq.fromCollection === collPath) return;
-            e.preventDefault();
-            e.stopPropagation();
-            e.dataTransfer.dropEffect = 'move';
-            if (dragOverFolder !== collPath) {
-              setDragOverFolder(collPath);
+            if (draggingReq && draggingReq.fromCollection !== collPath) {
+              e.preventDefault();
+              e.stopPropagation();
+              e.dataTransfer.dropEffect = 'move';
+              if (dragOverFolder !== collPath) {
+                setDragOverFolder(collPath);
+              }
+              return;
+            }
+            if (draggingFolder) {
+              if (draggingFolder.collPath === collPath || collPath.startsWith(`${draggingFolder.collPath}/`)) {
+                return;
+              }
+              e.preventDefault();
+              e.stopPropagation();
+              e.dataTransfer.dropEffect = 'move';
+              const rect = e.currentTarget.getBoundingClientRect();
+              const ratio = (e.clientY - rect.top) / Math.max(1, rect.height);
+              let position: 'before' | 'inside' | 'after' = 'inside';
+              if (draggingFolder.parentPath === parentPath) {
+                if (ratio < 0.25) position = 'before';
+                else if (ratio > 0.75) position = 'after';
+              }
+              if (folderDropTarget?.collPath !== collPath || folderDropTarget.position !== position) {
+                setFolderDropTarget({ collPath, position });
+              }
             }
           }}
           onDragLeave={(e) => {
@@ -244,25 +340,56 @@ export const Sidebar: React.FC<Props> = ({
             if (dragOverFolder === collPath) {
               setDragOverFolder(null);
             }
+            if (folderDropTarget?.collPath === collPath) {
+              setFolderDropTarget(null);
+            }
           }}
           onDrop={(e) => {
             e.preventDefault();
             e.stopPropagation();
-            setDragOverFolder(null);
-            const activeDrag = draggingReq;
-            setDraggingReq(null);
-            if (activeDrag && activeDrag.fromCollection !== collPath) {
-              setCollapsedCollections((prev) => ({ ...prev, [collPath]: false }));
-              onMoveRequest(activeDrag.req, collPath);
+            if (draggingReq) {
+              setDragOverFolder(null);
+              const activeDrag = draggingReq;
+              setDraggingReq(null);
+              if (activeDrag.fromCollection !== collPath) {
+                setCollapsedCollections((prev) => ({ ...prev, [collPath]: false }));
+                onMoveRequest(activeDrag.req, collPath);
+              }
+              return;
+            }
+            if (draggingFolder) {
+              const activeFolderDrag = draggingFolder;
+              const dropPos = folderDropTarget?.collPath === collPath ? folderDropTarget.position : 'inside';
+              setDraggingFolder(null);
+              setFolderDropTarget(null);
+              setRootDropActive(false);
+              if (
+                activeFolderDrag.collPath === collPath ||
+                collPath.startsWith(`${activeFolderDrag.collPath}/`)
+              ) {
+                return;
+              }
+              if ((dropPos === 'before' || dropPos === 'after') && activeFolderDrag.parentPath === parentPath) {
+                reorderFolderRelative(parentPath, activeFolderDrag.name, coll.name, dropPos);
+              } else {
+                setCollapsedCollections((prev) => ({ ...prev, [collPath]: false }));
+                onMoveCollection(activeFolderDrag.collPath, collPath);
+              }
             }
           }}
-          title={`${collPath} (${totalRequests} requests) — Right-click for Paste / Actions, or drop a request here to move`}
+          title={`${collPath} (${totalRequests} requests) — Drag to reorder or drop onto another folder to move; right-click for actions`}
           className={`group flex items-center justify-between gap-1.5 rounded-xl border px-2.5 py-2 cursor-pointer text-[13px] font-bold transition select-none ${
-            isDropTarget
+            isFolderDragged ? 'opacity-45 ' : ''
+          }${
+            isReqDropTarget || folderDropPos === 'inside'
               ? 'border-violet-500 bg-violet-500/15 text-violet-300 ring-1 ring-violet-500/40'
-              : isDark
-                ? 'border-transparent text-neutral-200 hover:border-neutral-700/80 hover:bg-neutral-800/85 hover:text-white'
-                : 'border-transparent text-slate-800 hover:border-slate-300 hover:bg-slate-200/85 hover:text-slate-950'
+              : folderDropPos === 'before'
+                ? 'border-transparent border-t-2 border-t-violet-500 bg-violet-500/5'
+                : folderDropPos === 'after'
+                  ? 'border-transparent border-b-2 border-b-violet-500 bg-violet-500/5'
+                  : isDark
+                    ? 'border-transparent text-neutral-200 hover:border-neutral-700/80 hover:bg-neutral-800/85 hover:text-white'
+                    : 'border-transparent text-slate-800 hover:border-slate-300 hover:bg-slate-200/85 hover:text-slate-950'
           }`}
         >
           <div className="flex items-center gap-2 flex-1 min-w-0">
@@ -459,7 +586,7 @@ export const Sidebar: React.FC<Props> = ({
               </form>
             )}
 
-            {(coll.folders || []).map((sub) => renderCollectionNode(sub, depth + 1))}
+            {(coll.folders || []).map((sub) => renderCollectionNode(sub, depth + 1, collPath))}
 
             {coll.requests.map((req) => {
               const isActive = activeRequestId === req.id;
@@ -648,6 +775,17 @@ export const Sidebar: React.FC<Props> = ({
             <FolderPlus className="h-3 w-3 text-amber-400" />
             <span>Folder</span>
           </button>
+          <button
+            onClick={collapseAllFolders}
+            className={`flex items-center justify-center rounded-lg border p-1.5 text-[11px] font-bold transition shadow-2xs ${
+              isDark
+                ? 'border-neutral-800 bg-neutral-900/90 text-neutral-400 hover:bg-neutral-800 hover:text-white'
+                : 'border-slate-300 bg-white text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+            }`}
+            title="Collapse All Opened Folders"
+          >
+            <ChevronsDownUp className="h-3.5 w-3.5" />
+          </button>
         </div>
       </div>
 
@@ -717,7 +855,37 @@ export const Sidebar: React.FC<Props> = ({
 
       {/* 4. Collections & Nested Folders Tree */}
       <div className="flex-1 overflow-y-auto p-2.5 flex flex-col gap-1.5">
-        {filteredCollections.map((coll) => renderCollectionNode(coll, 0))}
+        {draggingFolder && draggingFolder.parentPath !== '' && (
+          <div
+            onDragOver={(e) => {
+              e.preventDefault();
+              e.dataTransfer.dropEffect = 'move';
+              if (!rootDropActive) setRootDropActive(true);
+            }}
+            onDragLeave={() => setRootDropActive(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              const activeFolderDrag = draggingFolder;
+              setDraggingFolder(null);
+              setFolderDropTarget(null);
+              setRootDropActive(false);
+              if (activeFolderDrag && activeFolderDrag.parentPath !== '') {
+                onMoveCollection(activeFolderDrag.collPath, '');
+              }
+            }}
+            className={`rounded-xl border border-dashed px-3 py-2 text-center text-[11px] font-semibold transition ${
+              rootDropActive
+                ? 'border-violet-500 bg-violet-500/15 text-violet-300'
+                : isDark
+                  ? 'border-neutral-700 bg-neutral-900/60 text-neutral-400'
+                  : 'border-slate-300 bg-slate-100 text-slate-600'
+            }`}
+          >
+            Drop here to move folder to top level (root)
+          </div>
+        )}
+
+        {filteredCollections.map((coll) => renderCollectionNode(coll, 0, ''))}
 
         {filteredCollections.length === 0 && (
           <div className="p-6 text-center text-xs text-neutral-500 italic">
@@ -785,12 +953,12 @@ export const Sidebar: React.FC<Props> = ({
         </div>
       )}
 
-      {/* Right-Click Context Menu for Requests (Copy / Rename / Delete) and Folders (Paste / New / Delete) */}
+      {/* Right-Click Context Menu for Requests & Folders */}
       {contextMenu && (
         <div
           style={{
-            left: Math.min(contextMenu.x, Math.max(8, window.innerWidth - 220)),
-            top: Math.min(contextMenu.y, Math.max(8, window.innerHeight - 220)),
+            left: Math.min(contextMenu.x, Math.max(8, window.innerWidth - 230)),
+            top: Math.min(contextMenu.y, Math.max(8, window.innerHeight - 300)),
           }}
           onClick={(e) => e.stopPropagation()}
           className={`fixed z-50 w-52 rounded-xl border p-1.5 shadow-2xl text-xs font-medium backdrop-blur-md ${
@@ -929,6 +1097,62 @@ export const Sidebar: React.FC<Props> = ({
                 <Pencil className="h-3.5 w-3.5 text-neutral-400 shrink-0" />
                 <span>Rename Folder</span>
               </button>
+              {(() => {
+                const { names, index } = getSiblingInfo(contextMenu.parentPath, contextMenu.coll.name);
+                const canMoveUp = index > 0;
+                const canMoveDown = index >= 0 && index < names.length - 1;
+                return (
+                  <>
+                    <div className={`my-1 border-t ${isDark ? 'border-neutral-800' : 'border-slate-200'}`} />
+                    <button
+                      type="button"
+                      disabled={!canMoveUp}
+                      onClick={() => {
+                        const { coll, parentPath } = contextMenu;
+                        setContextMenu(null);
+                        moveFolderSibling(parentPath, coll.name, -1);
+                      }}
+                      className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition disabled:opacity-40 disabled:cursor-not-allowed ${
+                        isDark ? 'hover:bg-neutral-800 hover:text-white' : 'hover:bg-slate-100'
+                      }`}
+                    >
+                      <ArrowUp className="h-3.5 w-3.5 text-sky-400 shrink-0" />
+                      <span>Move Folder Up</span>
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!canMoveDown}
+                      onClick={() => {
+                        const { coll, parentPath } = contextMenu;
+                        setContextMenu(null);
+                        moveFolderSibling(parentPath, coll.name, 1);
+                      }}
+                      className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition disabled:opacity-40 disabled:cursor-not-allowed ${
+                        isDark ? 'hover:bg-neutral-800 hover:text-white' : 'hover:bg-slate-100'
+                      }`}
+                    >
+                      <ArrowDown className="h-3.5 w-3.5 text-sky-400 shrink-0" />
+                      <span>Move Folder Down</span>
+                    </button>
+                    {contextMenu.parentPath !== '' && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const { collPath } = contextMenu;
+                          setContextMenu(null);
+                          onMoveCollection(collPath, '');
+                        }}
+                        className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition ${
+                          isDark ? 'hover:bg-neutral-800 hover:text-white' : 'hover:bg-slate-100'
+                        }`}
+                      >
+                        <FolderUp className="h-3.5 w-3.5 text-amber-400 shrink-0" />
+                        <span>Move to Top Level</span>
+                      </button>
+                    )}
+                  </>
+                );
+              })()}
               <div className={`my-1 border-t ${isDark ? 'border-neutral-800' : 'border-slate-200'}`} />
               <button
                 type="button"

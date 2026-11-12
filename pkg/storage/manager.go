@@ -150,6 +150,7 @@ func (m *Manager) LoadCollections() ([]Collection, error) {
 		}
 	}
 
+	sortCollectionsByOrder(collectionsDir, collections)
 	return collections, nil
 }
 
@@ -193,9 +194,7 @@ func (m *Manager) loadCollectionNode(dirPath, relPath, leafName string) (Collect
 	sort.Slice(requests, func(i, j int) bool {
 		return strings.ToLower(requests[i].Name) < strings.ToLower(requests[j].Name)
 	})
-	sort.Slice(folders, func(i, j int) bool {
-		return strings.ToLower(folders[i].Name) < strings.ToLower(folders[j].Name)
-	})
+	sortCollectionsByOrder(dirPath, folders)
 
 	return Collection{
 		ID:       "coll_" + sanitizeFileName(relPath),
@@ -409,6 +408,9 @@ func (m *Manager) RenameCollection(oldName, newName string) error {
 	if oldRel == newRel {
 		return nil
 	}
+	if strings.HasPrefix(newRel, oldRel+"/") {
+		return fmt.Errorf("cannot move folder %q into its own subfolder %q", oldRel, newRel)
+	}
 
 	if _, err := os.Stat(oldDir); os.IsNotExist(err) {
 		return fmt.Errorf("collection %q not found", oldRel)
@@ -432,8 +434,20 @@ func (m *Manager) RenameCollection(oldName, newName string) error {
 		return err
 	}
 
+	// Preserve or update folder ordering metadata across rename/move
+	oldParentDir := filepath.Dir(oldDir)
+	newParentDir := filepath.Dir(newDir)
+	oldLeaf := filepath.Base(oldDir)
+	newLeaf := filepath.Base(newDir)
+	if oldParentDir == newParentDir {
+		replaceOrderEntry(oldParentDir, oldLeaf, newLeaf)
+	} else {
+		removeOrderEntry(oldParentDir, oldLeaf)
+		appendOrderEntryIfTracked(newParentDir, newLeaf)
+	}
+
 	return filepath.WalkDir(newDir, func(filePath string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil || d.IsDir() || !strings.HasSuffix(d.Name(), ".json") {
+		if walkErr != nil || d.IsDir() || strings.HasPrefix(d.Name(), ".") || !strings.HasSuffix(d.Name(), ".json") {
 			return walkErr
 		}
 		raw, err := os.ReadFile(filePath)
@@ -467,7 +481,152 @@ func (m *Manager) DeleteCollection(name string) error {
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		return nil
 	}
+	removeOrderEntry(filepath.Dir(dir), filepath.Base(dir))
 	return os.RemoveAll(dir)
+}
+
+// MoveCollection moves a directory (and all nested subfolders/requests) into targetParentPath (or root when empty).
+func (m *Manager) MoveCollection(oldPath, targetParentPath string) (string, error) {
+	oldRel, _, err := m.resolveCollectionDir(oldPath)
+	if err != nil {
+		return "", err
+	}
+	leafName := path.Base(oldRel)
+	var targetRel string
+	if strings.TrimSpace(targetParentPath) == "" {
+		targetRel = leafName
+	} else {
+		parentRel, _, err := m.resolveCollectionDir(targetParentPath)
+		if err != nil {
+			return "", err
+		}
+		targetRel = parentRel + "/" + leafName
+	}
+	if targetRel == oldRel {
+		return targetRel, nil
+	}
+	if err := m.RenameCollection(oldRel, targetRel); err != nil {
+		return "", err
+	}
+	return targetRel, nil
+}
+
+// ReorderCollections persists the custom display order of sibling directories under parentPath (or root when empty).
+func (m *Manager) ReorderCollections(parentPath string, orderedNames []string) error {
+	var parentDir string
+	if strings.TrimSpace(parentPath) == "" {
+		parentDir = filepath.Join(m.basePath, "collections")
+	} else {
+		_, resolvedDir, err := m.resolveCollectionDir(parentPath)
+		if err != nil {
+			return err
+		}
+		parentDir = resolvedDir
+	}
+	if err := os.MkdirAll(parentDir, 0755); err != nil {
+		return err
+	}
+	return writeOrderFile(parentDir, orderedNames)
+}
+
+const folderOrderFile = ".order.json"
+
+func readOrderFile(parentDir string) []string {
+	data, err := os.ReadFile(filepath.Join(parentDir, folderOrderFile))
+	if err != nil {
+		return nil
+	}
+	var order []string
+	if err := json.Unmarshal(data, &order); err != nil {
+		return nil
+	}
+	return order
+}
+
+func writeOrderFile(parentDir string, orderedNames []string) error {
+	seen := map[string]bool{}
+	clean := make([]string, 0, len(orderedNames))
+	for _, n := range orderedNames {
+		trimmed := strings.TrimSpace(n)
+		if trimmed == "" || seen[trimmed] {
+			continue
+		}
+		seen[trimmed] = true
+		clean = append(clean, trimmed)
+	}
+	data, err := json.MarshalIndent(clean, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(parentDir, folderOrderFile), data, 0644)
+}
+
+func sortCollectionsByOrder(parentDir string, folders []Collection) {
+	order := readOrderFile(parentDir)
+	indexByName := make(map[string]int, len(order))
+	for idx, name := range order {
+		indexByName[name] = idx
+	}
+	sort.SliceStable(folders, func(i, j int) bool {
+		iIdx, iOk := indexByName[folders[i].Name]
+		jIdx, jOk := indexByName[folders[j].Name]
+		if iOk && jOk {
+			return iIdx < jIdx
+		}
+		if iOk != jOk {
+			return iOk
+		}
+		return strings.ToLower(folders[i].Name) < strings.ToLower(folders[j].Name)
+	})
+}
+
+func replaceOrderEntry(parentDir, oldName, newName string) {
+	order := readOrderFile(parentDir)
+	if len(order) == 0 {
+		return
+	}
+	changed := false
+	for i, n := range order {
+		if n == oldName {
+			order[i] = newName
+			changed = true
+		}
+	}
+	if changed {
+		_ = writeOrderFile(parentDir, order)
+	}
+}
+
+func removeOrderEntry(parentDir, targetName string) {
+	order := readOrderFile(parentDir)
+	if len(order) == 0 {
+		return
+	}
+	next := make([]string, 0, len(order))
+	changed := false
+	for _, n := range order {
+		if n == targetName {
+			changed = true
+			continue
+		}
+		next = append(next, n)
+	}
+	if changed {
+		_ = writeOrderFile(parentDir, next)
+	}
+}
+
+func appendOrderEntryIfTracked(parentDir, newName string) {
+	order := readOrderFile(parentDir)
+	if len(order) == 0 {
+		return
+	}
+	for _, n := range order {
+		if n == newName {
+			return
+		}
+	}
+	_ = writeOrderFile(parentDir, append(order, newName))
 }
 
 // LoadEnvironments reads all environment files from ~/.pulse/environments/
