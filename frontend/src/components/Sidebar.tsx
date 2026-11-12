@@ -120,8 +120,35 @@ export const Sidebar: React.FC<Props> = ({
   const [draggingReq, setDraggingReq] = useState<{ req: RequestItem; fromCollection: string } | null>(null);
   const [dragOverFolder, setDragOverFolder] = useState<string | null>(null);
   const [draggingFolder, setDraggingFolder] = useState<{ collPath: string; parentPath: string; name: string } | null>(null);
-  const [folderDropTarget, setFolderDropTarget] = useState<{ collPath: string; position: 'before' | 'inside' | 'after' } | null>(null);
+  const [folderDropTarget, setFolderDropTarget] = useState<{
+    collPath: string;
+    name: string;
+    position: 'before' | 'inside' | 'after';
+  } | null>(null);
   const [rootDropActive, setRootDropActive] = useState(false);
+  const [dragCursor, setDragCursor] = useState<{ x: number; y: number } | null>(null);
+  const treeContainerRef = useRef<HTMLDivElement | null>(null);
+  const suppressNextClickRef = useRef(false);
+  const pendingDragRef = useRef<
+    | {
+        kind: 'folder';
+        collPath: string;
+        parentPath: string;
+        name: string;
+        startX: number;
+        startY: number;
+        active: boolean;
+      }
+    | {
+        kind: 'request';
+        req: RequestItem;
+        fromCollection: string;
+        startX: number;
+        startY: number;
+        active: boolean;
+      }
+    | null
+  >(null);
   const [contextMenu, setContextMenu] = useState<
     | { x: number; y: number; kind: 'request'; req: RequestItem; collPath: string }
     | { x: number; y: number; kind: 'folder'; coll: CollectionItem; collPath: string; parentPath: string }
@@ -220,6 +247,240 @@ export const Sidebar: React.FC<Props> = ({
     onReorderCollections(parentPath, withoutSrc);
   };
 
+  const dragActionsRef = useRef({
+    onMoveRequest,
+    onMoveCollection,
+    reorderFolderRelative,
+    setCollapsedCollections,
+  });
+  dragActionsRef.current = {
+    onMoveRequest,
+    onMoveCollection,
+    reorderFolderRelative,
+    setCollapsedCollections,
+  };
+
+  useEffect(() => {
+    const clearDragState = () => {
+      pendingDragRef.current = null;
+      document.body.style.cursor = '';
+      setDraggingFolder(null);
+      setDraggingReq(null);
+      setFolderDropTarget(null);
+      setDragOverFolder(null);
+      setRootDropActive(false);
+      setDragCursor(null);
+    };
+
+    const isSelfOrDescendant = (targetPath: string, srcPath: string) =>
+      targetPath === srcPath || targetPath.startsWith(`${srcPath}/`);
+
+    const resolveFolderHit = (
+      clientX: number,
+      clientY: number,
+      src: { collPath: string; parentPath: string; name: string },
+    ):
+      | { root: true }
+      | { root: false; collPath: string; parentPath: string; name: string; position: 'before' | 'inside' | 'after' }
+      | null => {
+      const container = treeContainerRef.current;
+      if (!container) return null;
+
+      if (src.parentPath !== '') {
+        const rootEl = container.querySelector<HTMLElement>('[data-root-drop="true"]');
+        if (rootEl) {
+          const r = rootEl.getBoundingClientRect();
+          if (clientX >= r.left && clientX <= r.right && clientY >= r.top && clientY <= r.bottom) {
+            return { root: true };
+          }
+        }
+      }
+
+      const under = document.elementsFromPoint(clientX, clientY);
+      for (const el of under) {
+        const header = (el as HTMLElement).closest?.('[data-folder-header]') as HTMLElement | null;
+        if (!header || !container.contains(header)) continue;
+        const targetPath = header.getAttribute('data-folder-path') || '';
+        const targetParent = header.getAttribute('data-folder-parent') || '';
+        const targetName = header.getAttribute('data-folder-name') || '';
+        if (!targetPath || isSelfOrDescendant(targetPath, src.collPath)) continue;
+        const rect = header.getBoundingClientRect();
+        const ratio = (clientY - rect.top) / Math.max(1, rect.height);
+        const position: 'before' | 'inside' | 'after' =
+          targetParent === src.parentPath
+            ? ratio < 0.35
+              ? 'before'
+              : ratio > 0.65
+                ? 'after'
+                : 'inside'
+            : 'inside';
+        return { root: false, collPath: targetPath, parentPath: targetParent, name: targetName, position };
+      }
+
+      for (const el of under) {
+        const node = (el as HTMLElement).closest?.('[data-folder-node]') as HTMLElement | null;
+        if (!node || !container.contains(node)) continue;
+        const targetPath = node.getAttribute('data-folder-path') || '';
+        const targetParent = node.getAttribute('data-folder-parent') || '';
+        const targetName = node.getAttribute('data-folder-name') || '';
+        if (!targetPath || isSelfOrDescendant(targetPath, src.collPath)) continue;
+        if (targetParent === src.parentPath) {
+          return { root: false, collPath: targetPath, parentPath: targetParent, name: targetName, position: 'after' };
+        }
+      }
+
+      const cRect = container.getBoundingClientRect();
+      if (clientX >= cRect.left && clientX <= cRect.right && clientY >= cRect.top && clientY <= cRect.bottom) {
+        let best: {
+          collPath: string;
+          parentPath: string;
+          name: string;
+          position: 'before' | 'after';
+          dist: number;
+        } | null = null;
+        const nodes = container.querySelectorAll<HTMLElement>('[data-folder-node]');
+        nodes.forEach((node) => {
+          const targetParent = node.getAttribute('data-folder-parent') || '';
+          const targetPath = node.getAttribute('data-folder-path') || '';
+          const targetName = node.getAttribute('data-folder-name') || '';
+          if (targetParent !== src.parentPath || !targetPath || isSelfOrDescendant(targetPath, src.collPath)) return;
+          const r = node.getBoundingClientRect();
+          const dTop = Math.abs(clientY - r.top);
+          const dBottom = Math.abs(clientY - r.bottom);
+          const position = dTop <= dBottom ? 'before' : 'after';
+          const dist = Math.min(dTop, dBottom);
+          if (!best || dist < best.dist) {
+            best = { collPath: targetPath, parentPath: targetParent, name: targetName, position, dist };
+          }
+        });
+        if (best) {
+          const b = best as {
+            collPath: string;
+            parentPath: string;
+            name: string;
+            position: 'before' | 'after';
+          };
+          return { root: false, collPath: b.collPath, parentPath: b.parentPath, name: b.name, position: b.position };
+        }
+      }
+
+      return null;
+    };
+
+    const resolveReqHit = (clientX: number, clientY: number, fromCollection: string): string | null => {
+      const container = treeContainerRef.current;
+      if (!container) return null;
+      const under = document.elementsFromPoint(clientX, clientY);
+      for (const el of under) {
+        const hit =
+          ((el as HTMLElement).closest?.('[data-folder-header]') as HTMLElement | null) ||
+          ((el as HTMLElement).closest?.('[data-folder-node]') as HTMLElement | null);
+        if (!hit || !container.contains(hit)) continue;
+        const targetPath = hit.getAttribute('data-folder-path') || '';
+        if (targetPath && targetPath !== fromCollection) return targetPath;
+      }
+      return null;
+    };
+
+    const onMouseMove = (e: MouseEvent) => {
+      const pending = pendingDragRef.current;
+      if (!pending) return;
+
+      if (!pending.active) {
+        if (Math.hypot(e.clientX - pending.startX, e.clientY - pending.startY) < 5) return;
+        pending.active = true;
+        setContextMenu(null);
+        document.body.style.cursor = 'grabbing';
+        if (pending.kind === 'folder') {
+          setDraggingFolder({ collPath: pending.collPath, parentPath: pending.parentPath, name: pending.name });
+        } else {
+          setDraggingReq({ req: pending.req, fromCollection: pending.fromCollection });
+        }
+      }
+
+      setDragCursor({ x: e.clientX, y: e.clientY });
+
+      const container = treeContainerRef.current;
+      if (container) {
+        const rect = container.getBoundingClientRect();
+        if (e.clientY >= rect.top && e.clientY < rect.top + 28) {
+          container.scrollTop -= 8;
+        } else if (e.clientY <= rect.bottom && e.clientY > rect.bottom - 28) {
+          container.scrollTop += 8;
+        }
+      }
+
+      if (pending.kind === 'folder') {
+        const hit = resolveFolderHit(e.clientX, e.clientY, pending);
+        if (hit && hit.root) {
+          setRootDropActive(true);
+          setFolderDropTarget(null);
+        } else if (hit && !hit.root) {
+          setRootDropActive(false);
+          setFolderDropTarget({ collPath: hit.collPath, name: hit.name, position: hit.position });
+        } else {
+          setRootDropActive(false);
+          setFolderDropTarget(null);
+        }
+      } else {
+        setDragOverFolder(resolveReqHit(e.clientX, e.clientY, pending.fromCollection));
+      }
+    };
+
+    const onMouseUp = (e: MouseEvent) => {
+      const pending = pendingDragRef.current;
+      if (!pending) return;
+      const wasActive = pending.active;
+
+      if (wasActive) {
+        suppressNextClickRef.current = true;
+        window.setTimeout(() => {
+          suppressNextClickRef.current = false;
+        }, 0);
+
+        if (pending.kind === 'folder') {
+          const hit = resolveFolderHit(e.clientX, e.clientY, pending);
+          clearDragState();
+          if (hit && hit.root && pending.parentPath !== '') {
+            dragActionsRef.current.onMoveCollection(pending.collPath, '');
+          } else if (hit && !hit.root) {
+            if ((hit.position === 'before' || hit.position === 'after') && hit.parentPath === pending.parentPath) {
+              dragActionsRef.current.reorderFolderRelative(pending.parentPath, pending.name, hit.name, hit.position);
+            } else {
+              dragActionsRef.current.setCollapsedCollections((prev) => ({ ...prev, [hit.collPath]: false }));
+              dragActionsRef.current.onMoveCollection(pending.collPath, hit.collPath);
+            }
+          }
+        } else {
+          const targetColl = resolveReqHit(e.clientX, e.clientY, pending.fromCollection);
+          clearDragState();
+          if (targetColl && targetColl !== pending.fromCollection) {
+            dragActionsRef.current.setCollapsedCollections((prev) => ({ ...prev, [targetColl]: false }));
+            dragActionsRef.current.onMoveRequest(pending.req, targetColl);
+          }
+        }
+        return;
+      }
+
+      pendingDragRef.current = null;
+    };
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && pendingDragRef.current) {
+        clearDragState();
+      }
+    };
+
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, []);
+
   const countRequestsRecursive = (node: CollectionItem): number => {
     let total = node.requests.length;
     for (const sub of node.folders || []) {
@@ -280,23 +541,38 @@ export const Sidebar: React.FC<Props> = ({
     const folderDropPos = folderDropTarget?.collPath === collPath ? folderDropTarget.position : null;
 
     return (
-      <div key={collPath} className="flex flex-col">
+      <div
+        key={collPath}
+        data-folder-node="true"
+        data-folder-path={collPath}
+        data-folder-parent={parentPath}
+        data-folder-name={coll.name}
+        className="relative flex flex-col"
+      >
+        {folderDropPos === 'before' && (
+          <div className="pointer-events-none absolute left-1 right-1 -top-0.5 z-20 h-0.5 rounded-full bg-violet-500 shadow-xs shadow-violet-500/60" />
+        )}
         {/* Collection / Folder Header Row */}
         <div
-          draggable={editingCollId !== collPath}
-          onDragStart={(e) => {
-            setContextMenu(null);
-            setDraggingReq(null);
-            setDraggingFolder({ collPath, parentPath, name: coll.name });
-            e.dataTransfer.effectAllowed = 'move';
-            e.dataTransfer.setData('text/plain', collPath);
-          }}
-          onDragEnd={() => {
-            setDraggingFolder(null);
-            setFolderDropTarget(null);
-            setRootDropActive(false);
+          data-folder-header="true"
+          data-folder-path={collPath}
+          data-folder-parent={parentPath}
+          data-folder-name={coll.name}
+          onMouseDown={(e) => {
+            if (e.button !== 0 || editingCollId === collPath) return;
+            if ((e.target as HTMLElement).closest('button, input')) return;
+            pendingDragRef.current = {
+              kind: 'folder',
+              collPath,
+              parentPath,
+              name: coll.name,
+              startX: e.clientX,
+              startY: e.clientY,
+              active: false,
+            };
           }}
           onClick={() => {
+            if (suppressNextClickRef.current) return;
             if (editingCollId !== collPath) {
               toggleCollapse(collPath);
             }
@@ -306,90 +582,17 @@ export const Sidebar: React.FC<Props> = ({
             e.stopPropagation();
             setContextMenu({ x: e.clientX, y: e.clientY, kind: 'folder', coll, collPath, parentPath });
           }}
-          onDragOver={(e) => {
-            if (draggingReq && draggingReq.fromCollection !== collPath) {
-              e.preventDefault();
-              e.stopPropagation();
-              e.dataTransfer.dropEffect = 'move';
-              if (dragOverFolder !== collPath) {
-                setDragOverFolder(collPath);
-              }
-              return;
-            }
-            if (draggingFolder) {
-              if (draggingFolder.collPath === collPath || collPath.startsWith(`${draggingFolder.collPath}/`)) {
-                return;
-              }
-              e.preventDefault();
-              e.stopPropagation();
-              e.dataTransfer.dropEffect = 'move';
-              const rect = e.currentTarget.getBoundingClientRect();
-              const ratio = (e.clientY - rect.top) / Math.max(1, rect.height);
-              let position: 'before' | 'inside' | 'after' = 'inside';
-              if (draggingFolder.parentPath === parentPath) {
-                if (ratio < 0.25) position = 'before';
-                else if (ratio > 0.75) position = 'after';
-              }
-              if (folderDropTarget?.collPath !== collPath || folderDropTarget.position !== position) {
-                setFolderDropTarget({ collPath, position });
-              }
-            }
-          }}
-          onDragLeave={(e) => {
-            if (e.currentTarget.contains(e.relatedTarget as Node)) return;
-            if (dragOverFolder === collPath) {
-              setDragOverFolder(null);
-            }
-            if (folderDropTarget?.collPath === collPath) {
-              setFolderDropTarget(null);
-            }
-          }}
-          onDrop={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            if (draggingReq) {
-              setDragOverFolder(null);
-              const activeDrag = draggingReq;
-              setDraggingReq(null);
-              if (activeDrag.fromCollection !== collPath) {
-                setCollapsedCollections((prev) => ({ ...prev, [collPath]: false }));
-                onMoveRequest(activeDrag.req, collPath);
-              }
-              return;
-            }
-            if (draggingFolder) {
-              const activeFolderDrag = draggingFolder;
-              const dropPos = folderDropTarget?.collPath === collPath ? folderDropTarget.position : 'inside';
-              setDraggingFolder(null);
-              setFolderDropTarget(null);
-              setRootDropActive(false);
-              if (
-                activeFolderDrag.collPath === collPath ||
-                collPath.startsWith(`${activeFolderDrag.collPath}/`)
-              ) {
-                return;
-              }
-              if ((dropPos === 'before' || dropPos === 'after') && activeFolderDrag.parentPath === parentPath) {
-                reorderFolderRelative(parentPath, activeFolderDrag.name, coll.name, dropPos);
-              } else {
-                setCollapsedCollections((prev) => ({ ...prev, [collPath]: false }));
-                onMoveCollection(activeFolderDrag.collPath, collPath);
-              }
-            }
-          }}
-          title={`${collPath} (${totalRequests} requests) — Drag to reorder or drop onto another folder to move; right-click for actions`}
-          className={`group flex items-center justify-between gap-1.5 rounded-xl border px-2.5 py-2 cursor-pointer text-[13px] font-bold transition select-none ${
+          title={`${collPath} (${totalRequests} requests) — Drag up/down to reorder or drop onto another folder to move; right-click for actions`}
+          className={`group flex items-center justify-between gap-1.5 rounded-xl border px-2.5 py-2 cursor-grab active:cursor-grabbing text-[13px] font-bold transition select-none ${
             isFolderDragged ? 'opacity-45 ' : ''
           }${
             isReqDropTarget || folderDropPos === 'inside'
               ? 'border-violet-500 bg-violet-500/15 text-violet-300 ring-1 ring-violet-500/40'
-              : folderDropPos === 'before'
-                ? 'border-transparent border-t-2 border-t-violet-500 bg-violet-500/5'
-                : folderDropPos === 'after'
-                  ? 'border-transparent border-b-2 border-b-violet-500 bg-violet-500/5'
-                  : isDark
-                    ? 'border-transparent text-neutral-200 hover:border-neutral-700/80 hover:bg-neutral-800/85 hover:text-white'
-                    : 'border-transparent text-slate-800 hover:border-slate-300 hover:bg-slate-200/85 hover:text-slate-950'
+              : folderDropPos === 'before' || folderDropPos === 'after'
+                ? 'border-violet-500/25 bg-violet-500/5'
+                : isDark
+                  ? 'border-transparent text-neutral-200 hover:border-neutral-700/80 hover:bg-neutral-800/85 hover:text-white'
+                  : 'border-transparent text-slate-800 hover:border-slate-300 hover:bg-slate-200/85 hover:text-slate-950'
           }`}
         >
           <div className="flex items-center gap-2 flex-1 min-w-0">
@@ -596,18 +799,22 @@ export const Sidebar: React.FC<Props> = ({
               return (
                 <div
                   key={req.id}
-                  draggable={editingReqId !== req.id}
-                  onDragStart={(e) => {
-                    setContextMenu(null);
-                    setDraggingReq({ req, fromCollection: collPath });
-                    e.dataTransfer.effectAllowed = 'move';
-                    e.dataTransfer.setData('text/plain', req.id);
+                  onMouseDown={(e) => {
+                    if (e.button !== 0 || editingReqId === req.id) return;
+                    if ((e.target as HTMLElement).closest('button, input')) return;
+                    pendingDragRef.current = {
+                      kind: 'request',
+                      req,
+                      fromCollection: collPath,
+                      startX: e.clientX,
+                      startY: e.clientY,
+                      active: false,
+                    };
                   }}
-                  onDragEnd={() => {
-                    setDraggingReq(null);
-                    setDragOverFolder(null);
+                  onClick={() => {
+                    if (suppressNextClickRef.current) return;
+                    onSelectRequest(req);
                   }}
-                  onClick={() => onSelectRequest(req)}
                   onContextMenu={(e) => {
                     e.preventDefault();
                     e.stopPropagation();
@@ -718,6 +925,9 @@ export const Sidebar: React.FC<Props> = ({
               </div>
             )}
           </div>
+        )}
+        {folderDropPos === 'after' && (
+          <div className="pointer-events-none absolute left-1 right-1 -bottom-0.5 z-20 h-0.5 rounded-full bg-violet-500 shadow-xs shadow-violet-500/60" />
         )}
       </div>
     );
@@ -854,25 +1064,10 @@ export const Sidebar: React.FC<Props> = ({
       )}
 
       {/* 4. Collections & Nested Folders Tree */}
-      <div className="flex-1 overflow-y-auto p-2.5 flex flex-col gap-1.5">
+      <div ref={treeContainerRef} className="flex-1 overflow-y-auto p-2.5 flex flex-col gap-1.5">
         {draggingFolder && draggingFolder.parentPath !== '' && (
           <div
-            onDragOver={(e) => {
-              e.preventDefault();
-              e.dataTransfer.dropEffect = 'move';
-              if (!rootDropActive) setRootDropActive(true);
-            }}
-            onDragLeave={() => setRootDropActive(false)}
-            onDrop={(e) => {
-              e.preventDefault();
-              const activeFolderDrag = draggingFolder;
-              setDraggingFolder(null);
-              setFolderDropTarget(null);
-              setRootDropActive(false);
-              if (activeFolderDrag && activeFolderDrag.parentPath !== '') {
-                onMoveCollection(activeFolderDrag.collPath, '');
-              }
-            }}
+            data-root-drop="true"
             className={`rounded-xl border border-dashed px-3 py-2 text-center text-[11px] font-semibold transition ${
               rootDropActive
                 ? 'border-violet-500 bg-violet-500/15 text-violet-300'
@@ -1170,6 +1365,47 @@ export const Sidebar: React.FC<Props> = ({
               </button>
             </>
           )}
+        </div>
+      )}
+
+      {/* Floating Pointer Drag Preview Badge */}
+      {dragCursor && (draggingFolder || draggingReq) && (
+        <div
+          style={{ left: dragCursor.x + 14, top: dragCursor.y + 12 }}
+          className={`pointer-events-none fixed z-50 flex items-center gap-2 rounded-xl border px-2.5 py-1.5 text-xs font-bold shadow-2xl ${
+            isDark
+              ? 'border-violet-500/50 bg-[#181c28]/95 text-white'
+              : 'border-violet-400 bg-white/95 text-slate-900'
+          }`}
+        >
+          {draggingFolder ? (
+            <>
+              <Folder className="h-3.5 w-3.5 text-amber-400 shrink-0" />
+              <span className="max-w-[180px] truncate">{draggingFolder.name}</span>
+              {rootDropActive && (
+                <span className="text-[10px] font-semibold text-violet-400">→ Root</span>
+              )}
+              {!rootDropActive && folderDropTarget && (
+                <span className="text-[10px] font-semibold text-violet-400">
+                  {folderDropTarget.position === 'before'
+                    ? `↑ Before ${folderDropTarget.name}`
+                    : folderDropTarget.position === 'after'
+                      ? `↓ After ${folderDropTarget.name}`
+                      : `↳ Into ${folderDropTarget.name}`}
+                </span>
+              )}
+            </>
+          ) : draggingReq ? (
+            <>
+              <span className="text-[9px] font-black px-1.5 py-0.5 rounded bg-violet-500/20 text-violet-300">
+                {draggingReq.req.method}
+              </span>
+              <span className="max-w-[180px] truncate">{draggingReq.req.name || 'Untitled'}</span>
+              {dragOverFolder && (
+                <span className="text-[10px] font-semibold text-violet-400">→ {dragOverFolder.split('/').pop()}</span>
+              )}
+            </>
+          ) : null}
         </div>
       )}
     </aside>
