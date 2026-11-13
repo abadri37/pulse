@@ -173,6 +173,12 @@ function Workspace() {
   const [activeRequest, setActiveRequest] = useState<RequestItem>(FALLBACK_REQUEST);
   const [openTabs, setOpenTabs] = useState<RequestItem[]>([FALLBACK_REQUEST]);
   const [layoutMode, setLayoutMode] = useState<'side' | 'stacked'>('side');
+  const [responsePaneWidthPct, setResponsePaneWidthPct] = useState<number>(() => {
+    const saved = Number(localStorage.getItem('pulse:responsePaneWidthPct'));
+    return saved >= 20 && saved <= 70 ? saved : 38;
+  });
+  const splitContainerRef = useRef<HTMLDivElement | null>(null);
+  const isResizingSplitRef = useRef(false);
   const [isSavedRecently, setIsSavedRecently] = useState(false);
   const [isExportedRecently, setIsExportedRecently] = useState(false);
   const [appVersion, setAppVersion] = useState<string>('1.0.0');
@@ -181,9 +187,29 @@ function Workspace() {
   const [isEnvModalOpen, setIsEnvModalOpen] = useState(false);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
 
-  // 2. Execution & Response State
-  const [response, setResponse] = useState<engine.HTTPResponse | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
+  // 2. Execution & Response State — keyed per-request so a response stays visible until its
+  // tab is closed, instead of vanishing whenever the user switches to/from another tab.
+  const [responsesByRequestId, setResponsesByRequestId] = useState<Record<string, engine.HTTPResponse | null>>({});
+  const [loadingRequestIds, setLoadingRequestIds] = useState<Set<string>>(new Set());
+  const response = responsesByRequestId[activeRequest.id] ?? null;
+  const isLoading = loadingRequestIds.has(activeRequest.id);
+
+  // Drop stored responses/loading flags for requests whose tabs have been closed/removed,
+  // so memory doesn't grow unbounded while keeping responses alive for still-open tabs.
+  const clearResponsesFor = (ids: string[]) => {
+    if (ids.length === 0) return;
+    setResponsesByRequestId((prev) => {
+      const next = { ...prev };
+      ids.forEach((id) => delete next[id]);
+      return next;
+    });
+    setLoadingRequestIds((prev) => {
+      if (!ids.some((id) => prev.has(id))) return prev;
+      const next = new Set(prev);
+      ids.forEach((id) => next.delete(id));
+      return next;
+    });
+  };
 
   // 3. Load workspace from disk on startup or refresh
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -385,7 +411,6 @@ function Workspace() {
     const targetReq = newlyImported || allNextReqs[0];
     if (targetReq) {
       setActiveRequest(targetReq);
-      setResponse(null);
       setOpenTabs((prev) => (prev.some((t) => t.id === targetReq.id) ? prev : [...prev, targetReq]));
     }
   };
@@ -407,7 +432,6 @@ function Workspace() {
     const existingTab = openTabs.find((t) => t.id === req.id);
     const target = existingTab || req;
     setActiveRequest(target);
-    setResponse(null);
     if (!existingTab) {
       setOpenTabs((prev) => [...prev, target]);
     }
@@ -415,22 +439,20 @@ function Workspace() {
 
   const handleSelectTab = (tab: RequestItem) => {
     setActiveRequest(tab);
-    setResponse(null);
   };
 
   const handleCloseTab = (id: string, e?: React.MouseEvent) => {
     e?.stopPropagation();
     const newTabs = openTabs.filter((t) => t.id !== id);
+    clearResponsesFor([id]);
     if (newTabs.length === 0) {
       const fallback = collections[0]?.requests[0] || FALLBACK_REQUEST;
       setOpenTabs([fallback]);
       setActiveRequest(fallback);
-      setResponse(null);
     } else {
       setOpenTabs(newTabs);
       if (activeRequest.id === id) {
         setActiveRequest(newTabs[newTabs.length - 1]);
-        setResponse(null);
       }
     }
   };
@@ -438,10 +460,10 @@ function Workspace() {
   const handleCloseOtherTabs = (keepId: string) => {
     const kept = openTabs.find((t) => t.id === keepId);
     if (!kept) return;
+    clearResponsesFor(openTabs.filter((t) => t.id !== keepId).map((t) => t.id));
     setOpenTabs([kept]);
     if (activeRequest.id !== keepId) {
       setActiveRequest(kept);
-      setResponse(null);
     }
   };
 
@@ -457,9 +479,9 @@ function Workspace() {
       queryParams: [],
       body: { type: 'none', raw: '' },
     };
+    clearResponsesFor(openTabs.map((t) => t.id));
     setOpenTabs([cleanTab]);
     setActiveRequest(cleanTab);
-    setResponse(null);
   };
 
   // Handle New Request - Immediately persists to disk and adds tab
@@ -505,7 +527,6 @@ function Workspace() {
         if (exists) return prev;
         return [...prev, newReq];
       });
-      setResponse(null);
     } catch (err) {
       console.error('Failed to create new request:', err);
     }
@@ -521,18 +542,17 @@ function Workspace() {
       await apiDeleteRequest(id, collectionName);
       const nextColls = await refreshWorkspace();
       const remainingTabs = openTabs.filter((t) => t.id !== id);
+      clearResponsesFor([id]);
       if (remainingTabs.length === 0) {
         const nextFirst = flattenRequests(nextColls)[0] || FALLBACK_REQUEST;
         setOpenTabs([nextFirst]);
         if (activeRequest.id === id) {
           setActiveRequest(nextFirst);
-          setResponse(null);
         }
       } else {
         setOpenTabs(remainingTabs);
         if (activeRequest.id === id) {
           setActiveRequest(remainingTabs[remainingTabs.length - 1]);
-          setResponse(null);
         }
       }
     } catch (err) {
@@ -558,7 +578,6 @@ function Workspace() {
       await refreshWorkspace();
       setActiveRequest(clonedReq);
       setOpenTabs((prev) => [...prev, clonedReq]);
-      setResponse(null);
     } catch (err) {
       console.error('Failed to paste request:', err);
     }
@@ -678,11 +697,12 @@ function Workspace() {
       await refreshWorkspace();
 
       setOpenTabs((prev) => {
+        const removedIds = prev.filter((t) => matchesTarget(t.collection)).map((t) => t.id);
+        clearResponsesFor(removedIds);
         const remaining = prev.filter((t) => !matchesTarget(t.collection));
         return remaining.length > 0 ? remaining : [FALLBACK_REQUEST];
       });
       if (matchesTarget(activeRequest.collection)) {
-        setResponse(null);
         setActiveRequest(FALLBACK_REQUEST);
       }
     } catch (err) {
@@ -794,7 +814,11 @@ function Workspace() {
   // Handle Send Request via Go Engine
   const handleSend = async () => {
     if (!activeRequest.url) return;
-    setIsLoading(true);
+
+    // Capture the request's id up front so the result lands in the correct tab's response slot
+    // even if the user switches to a different tab while this request is still in flight.
+    const requestId = activeRequest.id;
+    setLoadingRequestIds((prev) => new Set(prev).add(requestId));
 
     try {
       let bodyPayload = activeRequest.body.raw || '';
@@ -830,7 +854,7 @@ function Workspace() {
       });
 
       const result = await SendRequest(engineReq);
-      setResponse(result);
+      setResponsesByRequestId((prev) => ({ ...prev, [requestId]: result }));
 
       // Automatically sync variables modified by scripts into the active environment
       if (result.updatedVariables && Object.keys(result.updatedVariables).length > 0 && activeEnv) {
@@ -839,8 +863,9 @@ function Workspace() {
         handleSaveEnvironments(updatedEnvs);
       }
     } catch (err: any) {
-      setResponse(
-        new engine.HTTPResponse({
+      setResponsesByRequestId((prev) => ({
+        ...prev,
+        [requestId]: new engine.HTTPResponse({
           statusCode: 0,
           statusText: 'Client Error',
           headers: {},
@@ -848,16 +873,52 @@ function Workspace() {
           size: 0,
           timing: new engine.TimingStats(),
           error: String(err?.message || err),
-        })
-      );
+        }),
+      }));
     } finally {
-      setIsLoading(false);
+      setLoadingRequestIds((prev) => {
+        const next = new Set(prev);
+        next.delete(requestId);
+        return next;
+      });
     }
   };
 
   const handleOpenCurl = () => {
     setImportInitialTab('curl');
     setIsImportModalOpen(true);
+  };
+
+  // Dynamically resize the Response Viewer pane (and implicitly the Request Composer pane,
+  // which uses flex-1 to fill whatever space remains) by dragging the splitter handle.
+  const handleSplitDragStart = (e: React.MouseEvent) => {
+    e.preventDefault();
+    isResizingSplitRef.current = true;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    const onMouseMove = (moveEvent: MouseEvent) => {
+      if (!isResizingSplitRef.current || !splitContainerRef.current) return;
+      const rect = splitContainerRef.current.getBoundingClientRect();
+      const pct = ((rect.right - moveEvent.clientX) / rect.width) * 100;
+      const clamped = Math.min(65, Math.max(22, pct));
+      setResponsePaneWidthPct(clamped);
+    };
+
+    const onMouseUp = () => {
+      isResizingSplitRef.current = false;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      setResponsePaneWidthPct((current) => {
+        localStorage.setItem('pulse:responsePaneWidthPct', String(current));
+        return current;
+      });
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    };
+
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
   };
 
   const collectionNames = collections.map((c) => c.name);
@@ -950,9 +1011,9 @@ function Workspace() {
 
           {/* Flexible Split Container: Side-by-Side vs Stacked Rows */}
           {layoutMode === 'side' ? (
-            <div className="flex flex-1 overflow-hidden min-h-0 min-w-0">
+            <div ref={splitContainerRef} className="flex flex-1 overflow-hidden min-h-0 min-w-0">
               {/* Request Composer (Left/Center Pane) */}
-              <div className={`flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden border-r ${isDark ? 'border-neutral-800/80' : 'border-slate-200'}`}>
+              <div className="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden">
                 <RequestComposer
                   request={activeRequest}
                   onChange={handleActiveRequestChange}
@@ -965,8 +1026,24 @@ function Workspace() {
                 />
               </div>
 
-              {/* Response Viewer (Right Pane - compact width to give Sidebar & Composer more space) */}
-              <div className="w-[38%] min-w-[300px] min-h-0 flex flex-col overflow-hidden">
+              {/* Draggable Splitter: lets the Response Viewer (and therefore the Composer) width be adjusted dynamically */}
+              <div
+                onMouseDown={handleSplitDragStart}
+                role="separator"
+                aria-orientation="vertical"
+                title="Drag to resize"
+                className={`group w-1.5 shrink-0 cursor-col-resize flex items-center justify-center ${
+                  isDark ? 'bg-neutral-800/80 hover:bg-violet-600/60' : 'bg-slate-200 hover:bg-violet-400/60'
+                }`}
+              >
+                <div className={`h-8 w-0.5 rounded-full ${isDark ? 'bg-neutral-600 group-hover:bg-violet-300' : 'bg-slate-400 group-hover:bg-violet-600'}`} />
+              </div>
+
+              {/* Response Viewer (Right Pane - width dynamically adjustable via the splitter) */}
+              <div
+                style={{ width: `${responsePaneWidthPct}%`, minWidth: 300 }}
+                className="min-h-0 flex flex-col overflow-hidden shrink-0"
+              >
                 <ResponseViewer response={response} isLoading={isLoading} />
               </div>
             </div>

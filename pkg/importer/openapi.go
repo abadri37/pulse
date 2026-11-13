@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"pulse/pkg/engine"
 	"pulse/pkg/storage"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -262,6 +263,8 @@ func parseOpenAPIv3Map(root map[string]interface{}) (ImportResult, error) {
 		}
 	}
 
+	requests = append(requests, parseHoppscotchDroppedRequests(root, collName, rawTitle, &folders, seenFolders)...)
+
 	return ImportResult{
 		CollectionName: collName,
 		Folders:        folders,
@@ -407,6 +410,8 @@ func parseOpenAPIv2Map(root map[string]interface{}) (ImportResult, error) {
 			}
 		}
 	}
+
+	requests = append(requests, parseHoppscotchDroppedRequests(root, collName, rawTitle, &folders, seenFolders)...)
 
 	return ImportResult{
 		CollectionName: collName,
@@ -555,6 +560,153 @@ func resolveOpenAPITagFolders(
 		return []string{collName}
 	}
 	return targets
+}
+
+// hoppscotchDroppedRequest mirrors an entry in the "x-hoppscotch-dropped-requests" vendor
+// extension that Hoppscotch adds when exporting a collection to OpenAPI. OpenAPI's "paths" object
+// can only hold one operation per unique (path, method) pair, so whenever two or more Hoppscotch
+// requests collide on the same endpoint + method (e.g. several per-environment access-token
+// fetchers all posting to the same OAuth token URL, or the same resource endpoint duplicated
+// across multiple folders), Hoppscotch keeps a single one in "paths" and relocates the rest here
+// instead of silently discarding them.
+type hoppscotchDroppedRequest struct {
+	TagPath string             `json:"tagPath"`
+	Request folderRequestEntry `json:"request"`
+}
+
+var hoppscotchVariableRegex = regexp.MustCompile(`<<([^>]+)>>`)
+
+// convertHoppscotchVariableSyntax rewrites Hoppscotch's native "<<var>>" template syntax (used in
+// these dropped request objects, which are untouched copies of the original Hoppscotch requests)
+// into Pulse's "{{var}}" syntax so environment variable resolution keeps working after import.
+// Hoppscotch's editor can leave behind an empty/blank "<< >>" placeholder (e.g. an "insert
+// variable" chip the user never filled in); those carry no real variable name, so they are
+// dropped entirely rather than surviving as a meaningless, empty "{{ }}" chip in the imported URL.
+func convertHoppscotchVariableSyntax(s string) string {
+	if s == "" {
+		return s
+	}
+	return hoppscotchVariableRegex.ReplaceAllStringFunc(s, func(match string) string {
+		name := strings.TrimSpace(hoppscotchVariableRegex.FindStringSubmatch(match)[1])
+		if name == "" {
+			return ""
+		}
+		return "{{" + name + "}}"
+	})
+}
+
+// parseHoppscotchDroppedRequests recovers requests that Hoppscotch's OpenAPI exporter could not
+// place into the standard "paths" object due to (path, method) collisions, reconstructing their
+// original folder from "tagPath" (which uses the same "/" nesting convention as OpenAPI tags) so
+// they still get imported instead of disappearing.
+func parseHoppscotchDroppedRequests(
+	root map[string]interface{},
+	collName string,
+	rawTitle string,
+	folders *[]string,
+	seenFolders map[string]bool,
+) []storage.SavedRequest {
+	rawDropped := sliceVal(root["x-hoppscotch-dropped-requests"])
+	if len(rawDropped) == 0 {
+		return nil
+	}
+
+	var requests []storage.SavedRequest
+	for _, rawEntry := range rawDropped {
+		entryMap := mapVal(rawEntry)
+		if entryMap == nil {
+			continue
+		}
+
+		entryBytes, err := json.Marshal(entryMap)
+		if err != nil {
+			continue
+		}
+
+		var entry hoppscotchDroppedRequest
+		if err := json.Unmarshal(entryBytes, &entry); err != nil {
+			continue
+		}
+
+		r := entry.Request
+		method := strings.ToUpper(strings.TrimSpace(r.Method))
+		if method == "" {
+			method = "GET"
+		}
+
+		reqURL := strings.TrimSpace(convertHoppscotchVariableSyntax(strings.TrimSpace(r.Endpoint)))
+		if reqURL == "" {
+			reqURL = strings.TrimSpace(convertHoppscotchVariableSyntax(strings.TrimSpace(r.URL)))
+		}
+		if reqURL == "" {
+			continue
+		}
+
+		targetCollection := resolveSingleTagFolder(collName, rawTitle, entry.TagPath, folders, seenFolders)
+
+		var queryParams []engine.ParamPair
+		for _, p := range r.Params {
+			enabled := true
+			if p.Active != nil {
+				enabled = *p.Active
+			}
+			queryParams = append(queryParams, engine.ParamPair{
+				Key:     convertHoppscotchVariableSyntax(p.Key),
+				Value:   convertHoppscotchVariableSyntax(p.Value),
+				Enabled: enabled,
+			})
+		}
+
+		var headers []engine.HeaderPair
+		for _, h := range r.Headers {
+			enabled := true
+			if h.Active != nil {
+				enabled = *h.Active
+			}
+			headers = append(headers, engine.HeaderPair{
+				Key:     convertHoppscotchVariableSyntax(h.Key),
+				Value:   convertHoppscotchVariableSyntax(h.Value),
+				Enabled: enabled,
+			})
+		}
+
+		bodyRaw := convertHoppscotchVariableSyntax(r.Body.Body)
+		bodyType := "none"
+		if strings.TrimSpace(bodyRaw) != "" {
+			ct := strings.ToLower(r.Body.ContentType)
+			switch {
+			case strings.Contains(ct, "xml"):
+				bodyType = "xml"
+			case strings.Contains(ct, "x-www-form-urlencoded"):
+				bodyType = "x-www-form-urlencoded"
+			case strings.Contains(ct, "text/plain"):
+				bodyType = "raw"
+			default:
+				bodyType = "json"
+			}
+		}
+
+		reqName := strings.TrimSpace(r.Name)
+		if reqName == "" {
+			reqName = fmt.Sprintf("%s %s", method, reqURL)
+		}
+
+		requests = append(requests, storage.SavedRequest{
+			ID:                 nextImportID("req_oadrop"),
+			Name:               reqName,
+			Collection:         targetCollection,
+			Method:             method,
+			URL:                reqURL,
+			Headers:            headers,
+			QueryParams:        queryParams,
+			Body:               engine.RequestBody{Type: bodyType, Raw: bodyRaw},
+			PreRequestScript:   r.PreRequest,
+			PostResponseScript:  r.TestScript,
+			LastModifiedAt:     time.Now().Unix(),
+		})
+	}
+
+	return requests
 }
 
 type openAPIMethodOp struct {

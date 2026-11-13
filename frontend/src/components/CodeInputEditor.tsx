@@ -1,4 +1,4 @@
-import React, { useState, useRef, useMemo, useEffect } from 'react';
+import React, { useState, useRef, useMemo, useEffect, forwardRef, useImperativeHandle } from 'react';
 import { Environment } from '../types';
 import {
   applyEnvVarSuggestion,
@@ -148,7 +148,15 @@ const computeFoldableBlocks = (lines: string[], language: CodeLanguage): Foldabl
   return blocks;
 };
 
-export const CodeInputEditor: React.FC<Props> = ({
+// Imperative handle so callers (e.g. "Sample JSON" preset buttons) can programmatically
+// replace the editor's content while preserving the browser's native undo (Ctrl+Z) history.
+// Simply updating the `value` prop sets the textarea's value directly, which clears/bypasses
+// the undo stack; `document.execCommand('insertText', ...)` instead simulates a user edit.
+export interface CodeInputEditorHandle {
+  replaceValue: (newValue: string) => void;
+}
+
+export const CodeInputEditor = forwardRef<CodeInputEditorHandle, Props>(({
   value,
   onChange,
   language,
@@ -156,7 +164,7 @@ export const CodeInputEditor: React.FC<Props> = ({
   isDark = true,
   activeEnv,
   minHeightClass = 'min-h-[180px]',
-}) => {
+}, ref) => {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const mirrorRef = useRef<HTMLPreElement>(null);
   const gutterRef = useRef<HTMLDivElement>(null);
@@ -201,6 +209,29 @@ export const CodeInputEditor: React.FC<Props> = ({
       gutterRef.current.scrollTop = textareaRef.current.scrollTop;
     }
   };
+
+  useImperativeHandle(ref, () => ({
+    replaceValue: (newValue: string) => {
+      const ta = textareaRef.current;
+      if (!ta) {
+        onChange(newValue);
+        return;
+      }
+      ta.focus();
+      ta.select();
+      let applied = false;
+      try {
+        applied = document.execCommand('insertText', false, newValue);
+      } catch {
+        applied = false;
+      }
+      // Fallback for environments where execCommand is unavailable/no-op (undo history
+      // won't be preserved in that case, but the content still updates correctly).
+      if (!applied || ta.value !== newValue) {
+        onChange(newValue);
+      }
+    },
+  }));
 
   const toggleFold = (lineIdx: number) => {
     setCollapsedLines((prev) => {
@@ -1001,4 +1032,6 @@ export const CodeInputEditor: React.FC<Props> = ({
       )}
     </div>
   );
-};
+});
+
+CodeInputEditor.displayName = 'CodeInputEditor';

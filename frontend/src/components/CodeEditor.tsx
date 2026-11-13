@@ -322,13 +322,13 @@ export const CodeEditor: React.FC<Props> = ({
         renderedLines.push(
           <div
             key={lineIdx}
-            className={`flex h-5 leading-5 items-center select-text hover:bg-white/5 transition-colors group ${
+            className={`flex min-h-5 leading-5 items-start select-text hover:bg-white/5 transition-colors group ${
               isDark ? 'text-slate-200' : 'text-slate-800'
             }`}
           >
             <div
               onClick={() => toggleFold(block.startLine)}
-              className={`w-12 pr-2 text-right select-none flex items-center justify-end gap-1 cursor-pointer shrink-0 ${
+              className={`w-12 pr-2 pt-px text-right select-none flex items-center justify-end gap-1 cursor-pointer shrink-0 ${
                 isDark ? 'text-slate-600 hover:text-white' : 'text-slate-400 hover:text-slate-900'
               }`}
             >
@@ -336,7 +336,7 @@ export const CodeEditor: React.FC<Props> = ({
               <span className="text-[10px] text-violet-400 font-black">▸</span>
             </div>
 
-            <div className="pl-2 whitespace-pre font-mono text-xs flex items-center gap-1.5">
+            <div className="pl-2 whitespace-pre-wrap break-all font-mono text-xs flex items-center gap-1.5 min-w-0">
               {block.prefix && <span>{renderTokens(block.prefix)}</span>}
               <span
                 onClick={() => toggleFold(block.startLine)}
@@ -357,13 +357,13 @@ export const CodeEditor: React.FC<Props> = ({
         renderedLines.push(
           <div
             key={lineIdx}
-            className={`flex h-5 leading-5 items-center select-text hover:bg-white/5 transition-colors group ${
+            className={`flex min-h-5 leading-5 items-start select-text hover:bg-white/5 transition-colors group ${
               isDark ? 'text-slate-200' : 'text-slate-800'
             }`}
           >
             <div
               onClick={() => toggleFold(block.startLine)}
-              className={`w-12 pr-2 text-right select-none flex items-center justify-end gap-1 cursor-pointer shrink-0 ${
+              className={`w-12 pr-2 pt-px text-right select-none flex items-center justify-end gap-1 cursor-pointer shrink-0 ${
                 isDark ? 'text-slate-600 hover:text-white' : 'text-slate-400 hover:text-slate-900'
               }`}
             >
@@ -371,7 +371,7 @@ export const CodeEditor: React.FC<Props> = ({
               <span className="text-[10px] text-slate-400 font-black group-hover:text-violet-400">▾</span>
             </div>
 
-            <div className="pl-2 whitespace-pre font-mono text-xs">
+            <div className="pl-2 whitespace-pre-wrap break-all font-mono text-xs min-w-0">
               {renderTokens(rawLines[lineIdx])}
             </div>
           </div>
@@ -381,18 +381,18 @@ export const CodeEditor: React.FC<Props> = ({
       renderedLines.push(
         <div
           key={lineIdx}
-          className={`flex h-5 leading-5 items-center select-text hover:bg-white/5 transition-colors ${
+          className={`flex min-h-5 leading-5 items-start select-text hover:bg-white/5 transition-colors ${
             isDark ? 'text-slate-200' : 'text-slate-800'
           }`}
         >
-          <div className={`w-12 pr-2 text-right select-none flex items-center justify-end shrink-0 ${
+          <div className={`w-12 pr-2 pt-px text-right select-none flex items-center justify-end shrink-0 ${
             isDark ? 'text-slate-600' : 'text-slate-400'
           }`}>
             <span className="text-[11px] font-mono">{currentLineNum}</span>
             <span className="w-2.5" />
           </div>
 
-          <div className="pl-2 whitespace-pre font-mono text-xs">
+          <div className="pl-2 whitespace-pre-wrap break-all  font-mono text-xs min-w-0">
             {renderTokens(rawLines[lineIdx])}
           </div>
         </div>
@@ -438,7 +438,7 @@ export const CodeEditor: React.FC<Props> = ({
       </div>
 
       {/* Editor Body */}
-      <div className="flex-1 overflow-auto p-2">
+      <div className="flex-1 overflow-y-auto overflow-x-hidden p-2">
         {renderedLines}
       </div>
     </div>

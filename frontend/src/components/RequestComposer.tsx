@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { KeyValueItem, RequestItem, Environment } from '../types';
 import { KeyValueTable } from './KeyValueTable';
 import { LoadTestPanel } from './loadtest/LoadTestPanel';
-import { CodeInputEditor } from './CodeInputEditor';
+import { CodeInputEditor, CodeInputEditorHandle } from './CodeInputEditor';
 import { useTheme } from '../context/ThemeContext';
 import { encodeQueryPartPreservingVars, formatJsonPreservingEnvVars } from '../utils/envVars';
 import {
@@ -133,6 +133,7 @@ export const RequestComposer: React.FC<Props> = ({
   const [isBodyDropdownOpen, setIsBodyDropdownOpen] = useState(false);
   const [graphqlSubTab, setGraphqlSubTab] = useState<'query' | 'variables'>('query');
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const jsonEditorRef = useRef<CodeInputEditorHandle>(null);
 
   useEffect(() => {
     if (activeView === 'loadtest') {
@@ -877,12 +878,7 @@ export const RequestComposer: React.FC<Props> = ({
                     </span>
                     <button
                       type="button"
-                      onClick={() => {
-                        onChange({
-                          ...request,
-                          body: { ...request.body, raw: JSON_SAMPLE_TEMPLATE, jsonBody: JSON_SAMPLE_TEMPLATE },
-                        });
-                      }}
+                      onClick={() => jsonEditorRef.current?.replaceValue(JSON_SAMPLE_TEMPLATE)}
                       className={`px-2 py-1 rounded-lg text-[10px] font-bold border transition cursor-pointer ${
                         isDark
                           ? 'bg-violet-600/20 text-violet-300 hover:bg-violet-600/40 border-violet-500/30'
@@ -894,12 +890,7 @@ export const RequestComposer: React.FC<Props> = ({
                     </button>
                     <button
                       type="button"
-                      onClick={() => {
-                        onChange({
-                          ...request,
-                          body: { ...request.body, raw: JSON_EMPTY_TEMPLATE, jsonBody: JSON_EMPTY_TEMPLATE },
-                        });
-                      }}
+                      onClick={() => jsonEditorRef.current?.replaceValue(JSON_EMPTY_TEMPLATE)}
                       className={`px-2 py-1 rounded-lg text-[10px] font-bold border transition cursor-pointer ${
                         isDark
                           ? 'bg-neutral-700/40 text-slate-300 hover:bg-neutral-700/60 border-neutral-600/40'
@@ -911,12 +902,7 @@ export const RequestComposer: React.FC<Props> = ({
                     </button>
                     <button
                       type="button"
-                      onClick={() => {
-                        onChange({
-                          ...request,
-                          body: { ...request.body, raw: JSON_ARRAY_TEMPLATE, jsonBody: JSON_ARRAY_TEMPLATE },
-                        });
-                      }}
+                      onClick={() => jsonEditorRef.current?.replaceValue(JSON_ARRAY_TEMPLATE)}
                       className={`px-2 py-1 rounded-lg text-[10px] font-bold border transition cursor-pointer ${
                         isDark
                           ? 'bg-neutral-700/40 text-slate-300 hover:bg-neutral-700/60 border-neutral-600/40'
@@ -928,12 +914,7 @@ export const RequestComposer: React.FC<Props> = ({
                     </button>
                     <button
                       type="button"
-                      onClick={() => {
-                        onChange({
-                          ...request,
-                          body: { ...request.body, raw: '', jsonBody: '' },
-                        });
-                      }}
+                      onClick={() => jsonEditorRef.current?.replaceValue('')}
                       className={`px-2 py-1 rounded-lg text-[10px] font-bold transition cursor-pointer ${
                         isDark ? 'text-slate-400 hover:text-rose-400' : 'text-slate-600 hover:text-rose-600'
                       }`}
@@ -985,6 +966,7 @@ export const RequestComposer: React.FC<Props> = ({
 
                 {/* Syntax-Highlighted JSON Editor with Line Numbers & Collapsible Braces */}
                 <CodeInputEditor
+                  ref={jsonEditorRef}
                   value={jsonDisplayText}
                   onChange={(val) => {
                     onChange({

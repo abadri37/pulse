@@ -145,6 +145,12 @@ export const applyEnvVarSuggestion = (
     return { nextText, nextCursor };
   }
 
+  if(!trigger.hasBraces){
+    const nextText=text.slice(0,trigger.start)+varName+after;
+    const nextCursor=trigger.start+varName.length;
+    return {nextText,nextCursor};
+  }
+
   const consumeClosing = after.startsWith('}}') ? 2 : after.startsWith('}') ? 1 : 0;
   const insertion = `{{${varName}}}`;
   const nextText =

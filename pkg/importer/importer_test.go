@@ -2,6 +2,7 @@ package importer
 
 import (
 	"encoding/json"
+	"pulse/pkg/storage"
 	"strings"
 	"testing"
 )
@@ -497,5 +498,87 @@ func TestCollectionArray_ImportsAllCollectionsWithUniqueIDs(t *testing.T) {
 			t.Fatalf("duplicate ID %q in array import", r.ID)
 		}
 		seenIDs[r.ID] = true
+	}
+}
+
+func TestOpenAPI_HoppscotchDroppedRequests(t *testing.T) {
+	oa3 := `{
+  "openapi": "3.0.3",
+  "info": { "title": "Kinto-Global-API" },
+  "paths": {
+    "/workspaces": {
+      "get": {
+        "summary": "Get Workspaces",
+        "tags": ["Unit-Account"]
+      }
+    }
+  },
+  "x-hoppscotch-dropped-requests": [
+    {
+      "tagPath": "Driver",
+      "request": {
+        "name": "Get Workspaces",
+        "method": "GET",
+        "endpoint": "<<baseUrl>>/workspaces",
+        "params": [
+          { "key": "page", "value": "1", "active": true },
+          { "key": "<<filterKey>>", "value": "<<filterVal>>" }
+        ],
+        "headers": [
+          { "key": "Authorization", "value": "Bearer <<token>>", "active": true }
+        ]
+      }
+    },
+    {
+      "tagPath": "Fleet-Manager",
+      "request": {
+        "name": "Get Workspaces",
+        "method": "GET",
+        "endpoint": "<<baseUrl>>/workspaces"
+      }
+    }
+  ]
+}`
+	res, err := ParseCollectionWithFolders(oa3)
+	if err != nil {
+		t.Fatalf("ParseCollectionWithFolders failed: %v", err)
+	}
+	if len(res.Requests) != 3 {
+		t.Fatalf("expected 3 requests including Hoppscotch dropped requests, got %d: %+v", len(res.Requests), res.Requests)
+	}
+
+	dirs := map[string]int{}
+	for _, r := range res.Requests {
+		dirs[r.Collection]++
+		if r.Name != "Get Workspaces" {
+			t.Errorf("unexpected request name: %s", r.Name)
+		}
+	}
+
+	if dirs["Kinto-Global-API/Unit-Account"] != 1 {
+		t.Errorf("expected 1 in Unit-Account, got %d", dirs["Kinto-Global-API/Unit-Account"])
+	}
+	if dirs["Kinto-Global-API/Driver"] != 1 {
+		t.Errorf("expected 1 in Driver, got %d", dirs["Kinto-Global-API/Driver"])
+	}
+	if dirs["Kinto-Global-API/Fleet-Manager"] != 1 {
+		t.Errorf("expected 1 in Fleet-Manager, got %d", dirs["Kinto-Global-API/Fleet-Manager"])
+	}
+
+	var driverReq *storage.SavedRequest
+	for i := range res.Requests {
+		if res.Requests[i].Collection == "Kinto-Global-API/Driver" {
+			driverReq = &res.Requests[i]
+			break
+		}
+	}
+	if driverReq == nil {
+		t.Fatalf("driverReq not found")
+	}
+	if driverReq.URL != "{{baseUrl}}/workspaces" {
+		t.Errorf("expected variable converted to {{baseUrl}}/workspaces, got %s", driverReq.URL)
+	}
+	if len(driverReq.Headers) != 1 || driverReq.Headers[0].Value != "Bearer {{token}}" {
+		t.Errorf("expected header variable converted, got %+v", driverReq.Headers)
 	}
 }
